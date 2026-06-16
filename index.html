@@ -396,7 +396,7 @@ waterMat.onBeforeCompile = (sh)=>{
     .replace('#include <begin_vertex>',
       '#include <begin_vertex>\n float wv = sin(position.x*7.0+uTime*1.4)*cos(position.z*7.0+uTime*1.1)*0.025; transformed += normalize(position)*wv;');
 };
-const water = new THREE.Mesh(new THREE.IcosahedronGeometry(PLANET_R-0.2, 24), waterMat);
+const water = new THREE.Mesh(new THREE.IcosahedronGeometry(PLANET_R-0.08, 24), waterMat);
 water.userData.noToon = true;     // keep its translucent look, don't cel-shade
 scene.add(water);
 
@@ -924,22 +924,25 @@ addEventListener('keyup', e=>{ keys[e.code]=false; });
 // camera: independent look direction so movement can be camera-relative
 let camPitch = 0.5, camDist = 6.2;
 let camDir = pFwd.clone();          // horizontal direction the camera looks along (tangent)
-let dragging=false, lastX=0, lastY=0;
-renderer.domElement.addEventListener('pointerdown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; });
-addEventListener('pointerup', ()=> dragging=false);
+let dragId=null, lastX=0, lastY=0, dragMoved=false;
+renderer.domElement.addEventListener('pointerdown', e=>{
+  if(dragId!==null) return;                 // one finger owns the camera; ignore extra touches
+  dragId=e.pointerId; lastX=e.clientX; lastY=e.clientY; dragMoved=false;
+});
 addEventListener('pointermove', e=>{
-  if(!dragging) return;
-  camDir.applyAxisAngle(pUp, -(e.clientX-lastX)*0.005);                 // orbit look around up
+  if(e.pointerId!==dragId) return;           // joystick finger never rotates the view
+  const dx=e.clientX-lastX, dy=e.clientY-lastY;
+  if(Math.abs(dx)+Math.abs(dy)>4) dragMoved=true;
+  camDir.applyAxisAngle(pUp, -dx*0.005);                              // orbit look around up
   camDir.sub(pUp.clone().multiplyScalar(camDir.dot(pUp))).normalize();
-  camPitch = THREE.MathUtils.clamp(camPitch+(e.clientY-lastY)*0.005, -0.2, 1.2);
+  camPitch = THREE.MathUtils.clamp(camPitch+dy*0.005, -0.2, 1.2);
   lastX=e.clientX; lastY=e.clientY;
 });
+addEventListener('pointerup',     e=>{ if(e.pointerId===dragId) dragId=null; });
+addEventListener('pointercancel', e=>{ if(e.pointerId===dragId) dragId=null; });
 addEventListener('wheel', e=>{ camDist = THREE.MathUtils.clamp(camDist+e.deltaY*0.01, 4, 14); }, {passive:true});
-// click to deliver
+// tap (no drag) to deliver
 renderer.domElement.addEventListener('click', ()=>{ if(!dragMoved) tryDeliver(); });
-let dragMoved=false, downX=0;
-renderer.domElement.addEventListener('pointerdown', e=>{ downX=e.clientX; dragMoved=false; });
-addEventListener('pointermove', e=>{ if(dragging && Math.abs(e.clientX-downX)>6) dragMoved=true; });
 
 // Mobile joystick
 const isTouch = matchMedia('(pointer: coarse)').matches;
@@ -1096,7 +1099,7 @@ function resolveCollisions(){
 // Tilt-shift (miniature toy-world look) + soft vignette
 const TiltShiftShader = {
   uniforms: { tDiffuse:{value:null}, resolution:{value:new THREE.Vector2(1,1)},
-              focus:{value:0.52}, range:{value:0.16}, strength:{value:2.2} },
+              focus:{value:0.54}, range:{value:0.12}, strength:{value:3.2} },
   vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
   fragmentShader: `
     uniform sampler2D tDiffuse; uniform vec2 resolution;
@@ -1128,8 +1131,6 @@ function buildComposer(){
     const ssao=new SSAOPass(scene, camera, innerWidth, innerHeight);
     ssao.kernelRadius=0.5; ssao.minDistance=0.0008; ssao.maxDistance=0.12;   // tuned for our small scale
     composer.addPass(ssao);
-    const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight), 0.32, 0.6, 0.85);
-    composer.addPass(bloom);
     composer.addPass(new OutputPass());                                       // ACES tonemap + sRGB
     tiltPass=new ShaderPass(TiltShiftShader);
     tiltPass.uniforms.resolution.value.set(innerWidth, innerHeight);
@@ -1266,6 +1267,15 @@ function update(dt){
 
   // --- camera (orbit behind the look direction, on planet up) ---
   const up=pUp;
+  // gentle auto-recenter behind the player while walking (skipped during manual drag / gyro)
+  if(moving && dragId===null && !gyroOn){
+    const cs=THREE.MathUtils.clamp(camDir.dot(pFwd),-1,1), a=Math.acos(cs);
+    if(a>1e-3){
+      const sign=Math.sign(new THREE.Vector3().crossVectors(camDir,pFwd).dot(up))||1;
+      camDir.applyAxisAngle(up, Math.min(a, 1.5*dt)*sign);
+      camDir.sub(up.clone().multiplyScalar(camDir.dot(up))).normalize();
+    }
+  }
   const pitch = (gyroOn && gyroPitch!=null) ? gyroPitch : camPitch;
   // camera looks along camDir, plus an optional gyro offset
   const f=camDir.clone().applyAxisAngle(up, gyroOn?gyroYaw:0).normalize();
@@ -1356,7 +1366,7 @@ setToon(true);   // cartoon look on by default
 function triggerJump(){ if(grounded){ vAlt=JUMP_V; grounded=false; } }
 let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, wideArmed=true, wideStart=0;
 const faceBtn=document.getElementById('faceBtn');
-const WIDE_ON=0.4, WIDE_OFF=0.22, WIDE_HOLD=100;   // eyes opened wide >=100ms = jump
+const WIDE_ON=0.28, WIDE_OFF=0.15, WIDE_HOLD=100;  // eyes-wide OR brows-up >=100ms = jump
 faceBtn.addEventListener('click', async ()=>{
   if(faceOn){ stopFace(); return; }
   faceBtn.textContent='😮 載入中…';
@@ -1389,7 +1399,9 @@ function faceLoop(){
   const cat = res && res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories;
   if(!cat) return;
   const get=n=>{ const c=cat.find(x=>x.categoryName===n); return c?c.score:0; };
-  const wide=(get('eyeWideLeft')+get('eyeWideRight'))/2;
+  const eyeWide=(get('eyeWideLeft')+get('eyeWideRight'))/2;
+  const brow=Math.max(get('browInnerUp'), (get('browOuterUpLeft')+get('browOuterUpRight'))/2);
+  const wide=Math.max(eyeWide, brow);          // either widening eyes or raising brows counts
   const now=performance.now();
   if(wide>WIDE_ON){
     if(wideStart===0) wideStart=now;
