@@ -64,6 +64,12 @@
     backdrop-filter: blur(6px); cursor: pointer; }
   #gyroBtn.on { background: rgba(224,83,61,.9); border-color: rgba(255,255,255,.5); }
 
+  #fxBtn { position: fixed; top: 56px; right: 16px; z-index: 30; pointer-events: auto;
+    background: rgba(30,40,60,.55); color: #fff; border: 1px solid rgba(255,255,255,.3);
+    border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600;
+    backdrop-filter: blur(6px); cursor: pointer; }
+  #fxBtn.on { background: rgba(120,90,210,.9); border-color: rgba(255,255,255,.5); }
+
   /* Mobile buttons */
   #mobile { position: fixed; inset: 0; pointer-events: none; display: none; }
   .stick { position: absolute; bottom: 30px; pointer-events: auto; }
@@ -116,6 +122,7 @@
 </div>
 
 <button id="gyroBtn">📱 體感視角</button>
+<button id="fxBtn">✨ 特效</button>
 
 <div id="mobile">
   <div id="stickL" class="stick"><div class="pad"><div class="knob" id="knobL"></div></div></div>
@@ -156,6 +163,12 @@
 <script type="module">
 import * as THREE from 'three';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
 
 // ---------- Config ----------
 const PLANET_R = 16;          // planet radius (small => visible curvature)
@@ -876,6 +889,7 @@ function endGame(){
 addEventListener('resize', ()=>{
   camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  if(composer) composer.setSize(innerWidth, innerHeight);
 });
 
 // ---------- Collision ----------
@@ -900,13 +914,40 @@ function resolveCollisions(){
   }
 }
 
+// ---------- Post-processing (toggleable: SSAO + bloom + SMAA) ----------
+let composer=null, fxOn=false;
+const fxBtn=document.getElementById('fxBtn');
+function buildComposer(){
+  try{
+    composer=new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const ssao=new SSAOPass(scene, camera, innerWidth, innerHeight);
+    ssao.kernelRadius=0.5; ssao.minDistance=0.0008; ssao.maxDistance=0.12;   // tuned for our small scale
+    composer.addPass(ssao);
+    const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight), 0.32, 0.6, 0.85);
+    composer.addPass(bloom);
+    composer.addPass(new OutputPass());                                       // ACES tonemap + sRGB
+    const pr=renderer.getPixelRatio();
+    composer.addPass(new SMAAPass(innerWidth*pr, innerHeight*pr));
+  }catch(err){ console.warn('FX unavailable:', err); composer=null; }
+}
+function setFx(on){
+  if(on && !composer) buildComposer();
+  fxOn = on && !!composer;
+  fxBtn.classList.toggle('on', fxOn);
+  fxBtn.textContent = fxOn ? '✨ 特效:開' : '✨ 特效';
+}
+fxBtn.addEventListener('click', ()=> setFx(!fxOn));
+if(!isTouch) setFx(true);   // desktop on by default; phones opt in
+
 // ---------- Loop ----------
 const clock=new THREE.Clock();
 const _camPos=new THREE.Vector3(), _camTarget=new THREE.Vector3();
 function tick(){
   const dt=Math.min(clock.getDelta(), 0.05);
   if(started) update(dt);
-  renderer.render(scene, camera);
+  try { if(fxOn && composer) composer.render(); else renderer.render(scene, camera); }
+  catch(err){ console.warn('FX render failed, disabling:', err); fxOn=false; renderer.render(scene, camera); }
   requestAnimationFrame(tick);
 }
 function update(dt){
@@ -924,7 +965,7 @@ function update(dt){
     // desired heading in the tangent plane, built from where the camera looks
     const viewYaw=(gyroOn?gyroYaw:0);
     const vDir=camDir.clone().applyAxisAngle(pUp, viewYaw).normalize();
-    const vRight=new THREE.Vector3().crossVectors(pUp, vDir).normalize();
+    const vRight=new THREE.Vector3().crossVectors(vDir, pUp).normalize(); // screen-right
     const D=vDir.multiplyScalar(fComp).add(vRight.multiplyScalar(rComp));
     D.sub(pUp.clone().multiplyScalar(D.dot(pUp)));
     if(D.lengthSq()>1e-6){
