@@ -329,28 +329,48 @@ const cGrass  = new THREE.Color(0x6cb24a);
 const cHill   = new THREE.Color(0x8fc862);
 const cSand   = new THREE.Color(0xdcc98f);
 const cRock   = new THREE.Color(0x9c9a8c);
-const colArr = [];
-const _c = new THREE.Color();
-const ss = THREE.MathUtils.smoothstep;
-for (let i=0;i<pos.count;i++){
-  v.fromBufferAttribute(pos,i);
-  const n = v.clone().normalize();
-  const h = v.length() - PLANET_R;                       // -BUMP_AMP..BUMP_AMP
-  const t = THREE.MathUtils.clamp((h+BUMP_AMP)/(2*BUMP_AMP), 0, 1); // 0 valley .. 1 peak
-  // continuous green gradient valley -> grass -> hill (no hard banding)
-  _c.copy(cValley).lerp(cGrass, ss(t,0.0,0.55)).lerp(cHill, ss(t,0.55,1.0));
-  // soft sandy patches only on low/flat ground
-  const sand = Math.sin(n.x*5.2+1.3)*Math.cos(n.z*4.7);
-  _c.lerp(cSand, ss(sand,0.62,0.92) * (1-ss(t,0.45,0.7)) * 0.85);
-  // rocky peaks fade in
-  _c.lerp(cRock, ss(t,0.82,1.0));
-  _c.offsetHSL(0, 0, (hash(i*1.7)-0.5)*0.02);            // very subtle tonal noise
-  colArr.push(_c.r, _c.g, _c.b);
-}
+// vertex colours now carry only baked AO (grayscale); biome colour is per-fragment
+const colArr = new Float32Array(pos.count*3).fill(1);
 planetGeo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3));
+
+// Per-fragment terrain colour (eliminates triangle facets regardless of mesh density)
+const TERRAIN_GLSL = `
+varying vec3 vTPos;
+vec3 terrainColor(vec3 p){
+  float R = ${PLANET_R.toFixed(1)};
+  float A = ${BUMP_AMP.toFixed(3)};
+  float h = length(p) - R;
+  float t = clamp((h + A)/(2.0*A), 0.0, 1.0);
+  vec3 cValley = vec3(0.247,0.541,0.235);
+  vec3 cGrass  = vec3(0.424,0.698,0.290);
+  vec3 cHill   = vec3(0.561,0.784,0.384);
+  vec3 cSand   = vec3(0.863,0.788,0.561);
+  vec3 cRock   = vec3(0.612,0.604,0.549);
+  vec3 col = mix(cValley, cGrass, smoothstep(0.0,0.55,t));
+  col = mix(col, cHill, smoothstep(0.55,1.0,t));
+  vec3 n = normalize(p);
+  float sand = sin(n.x*5.2+1.3)*cos(n.z*4.7);
+  col = mix(col, cSand, smoothstep(0.62,0.92,sand)*(1.0-smoothstep(0.45,0.7,t))*0.85);
+  col = mix(col, cRock, smoothstep(0.82,1.0,t));
+  return col;
+}`;
+function injectTerrain(mat){
+  mat.onBeforeCompile = (sh)=>{
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vTPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\n  vTPos = position;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n'+TERRAIN_GLSL)
+      .replace('#include <color_fragment>', '#include <color_fragment>\n  diffuseColor.rgb *= terrainColor(vTPos);');
+  };
+  mat.customProgramCacheKey = ()=> 'terrain_'+mat.type;
+  mat.needsUpdate = true;
+}
+
 const planet = new THREE.Mesh(planetGeo, new THREE.MeshStandardMaterial({
   vertexColors: true, flatShading: true, roughness: 0.95
 }));
+injectTerrain(planet.material);
 planet.receiveShadow = true;
 scene.add(planet);
 
@@ -1134,6 +1154,7 @@ scene.traverse(o=>{
       side:s.side, flatShading:s.flatShading,
       emissive:(s.emissive ? s.emissive.clone() : new THREE.Color(0x000000))
     });
+    if(o===planet) injectTerrain(t);   // keep per-fragment terrain colour in toon mode
     toonPairs.push({o, std:s, toon:t});
   }
 });
