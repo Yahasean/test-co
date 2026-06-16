@@ -147,13 +147,15 @@
 <script type="importmap">
 {
   "imports": {
-    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
   }
 }
 </script>
 
 <script type="module">
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 // ---------- Config ----------
 const PLANET_R = 16;          // planet radius (small => visible curvature)
@@ -198,10 +200,17 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;   // filmic, "baked" feel
+renderer.toneMappingExposure = 1.05;
 app.appendChild(renderer.domElement);
 
-// Lights
-const sun = new THREE.DirectionalLight(0xfff4d6, 2.1);
+// Soft image-based lighting from a procedural room (no assets, gives that polished look)
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+const ENV_INTENSITY = 0.35;   // keep reflections subtle
+
+// Lights (toned down to balance the new ambient IBL)
+const sun = new THREE.DirectionalLight(0xfff4d6, 1.7);
 sun.position.set(30, 40, 20);
 sun.castShadow = true;
 sun.shadow.mapSize.set(2048, 2048);
@@ -210,9 +219,9 @@ sun.shadow.camera.left = -40; sun.shadow.camera.right = 40;
 sun.shadow.camera.top = 40; sun.shadow.camera.bottom = -40;
 sun.shadow.radius = 4; sun.shadow.bias = -0.0004;
 scene.add(sun);
-scene.add(new THREE.HemisphereLight(0xcfe9ff, 0x5a8a4a, 0.9));
-scene.add(new THREE.AmbientLight(0xfff3e0, 0.22));
-const rim = new THREE.DirectionalLight(0xa9d8ff, 0.5); // cool back rim light
+scene.add(new THREE.HemisphereLight(0xcfe9ff, 0x5a8a4a, 0.5));
+scene.add(new THREE.AmbientLight(0xfff3e0, 0.1));
+const rim = new THREE.DirectionalLight(0xa9d8ff, 0.35); // cool back rim light
 rim.position.set(-25, 10, -30);
 scene.add(rim);
 
@@ -302,6 +311,15 @@ function placeOnPlanet(obj, dir){
   obj.position.copy(up.clone().multiplyScalar(terrainRadius(up) - 0.04)); // sit on the hills
   orient(obj, up, new THREE.Vector3(0,0,1));
 }
+// obstacles the player can't walk through: {dir:unit, r:radius}
+const colliders = [];
+// soft contact shadow under props — cheap fake-baked AO that grounds objects
+function shadowDisc(r){
+  const m = new THREE.Mesh(new THREE.CircleGeometry(r, 18),
+    new THREE.MeshBasicMaterial({ color:0x000000, transparent:true, opacity:0.2, depthWrite:false }));
+  m.rotation.x = -Math.PI/2; m.position.y = 0.015; m.renderOrder = 1;
+  return m;
+}
 const LEAF_COLORS = [0x3f8f3a, 0x4fa046, 0x5cae4e, 0x47953f, 0x6cae3c];
 function makeTree(){
   const g = new THREE.Group();
@@ -317,7 +335,7 @@ function makeTree(){
   l2.position.set(0.25,1.25,0.1); l2.castShadow=true;
   const l3 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34,0), lmat);
   l3.position.set(-0.2,1.2,-0.1); l3.castShadow=true;
-  g.add(trunk,l1,l2,l3); g.scale.setScalar(s);
+  g.add(trunk,l1,l2,l3,shadowDisc(0.6)); g.scale.setScalar(s);
   return g;
 }
 function makePine(){
@@ -331,7 +349,7 @@ function makePine(){
     const cone=new THREE.Mesh(new THREE.ConeGeometry(0.5-k*0.12, 0.55, 7), pmat);
     cone.position.y=0.6+k*0.38; cone.castShadow=true; g.add(cone);
   }
-  g.scale.setScalar(s); return g;
+  g.add(shadowDisc(0.5)); g.scale.setScalar(s); return g;
 }
 function makeBush(){
   const g = new THREE.Group();
@@ -399,6 +417,7 @@ function makeHouse(color){
   const ch=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.34,0.16),
     new THREE.MeshStandardMaterial({color:0x7a5a4a, roughness:1}));
   ch.position.set(w*0.25,h+0.32,-w*0.2); ch.castShadow=true; g.add(ch);
+  g.add(shadowDisc(w*0.78));
   return g;
 }
 
@@ -412,22 +431,28 @@ function jitterDir(base, spread){
   const a=(rng()*2-1)*spread, b=(rng()*2-1)*spread;
   return base.clone().add(t1.multiplyScalar(a)).add(t2.multiplyScalar(b)).normalize();
 }
-function scatter(makeFn, n, randomYaw=true){
+function scatter(makeFn, n, collideR=0){
   for(let i=0;i<n;i++){
-    const o=makeFn(); placeOnPlanet(o, randDir());
-    if(randomYaw) o.rotateY(rng()*Math.PI*2);
+    const dir=randDir();
+    const o=makeFn(); placeOnPlanet(o, dir);
+    o.rotateY(rng()*Math.PI*2);
     scene.add(o);
+    if(collideR>0) colliders.push({dir:dir.clone().normalize(), r:collideR});
   }
 }
-scatter(makeTree, 38);
-scatter(makePine, 22);
+scatter(makeTree, 38, 0.4);
+scatter(makePine, 22, 0.4);
 scatter(makeBush, 30);
 scatter(makeGrass, 120);
 scatter(makeFlower, 80);
 scatter(makeMushroom, 16);
-scatter(makeRock, 26);
+scatter(makeRock, 26, 0.4);
 const HOUSE_COLORS=[0xe8c07a,0xd98c6a,0x8fb3d9,0xc6d98c,0xd9a8c6,0xa8c6d9,0xeac98c];
-for(let i=0;i<5;i++){ const h=makeHouse(HOUSE_COLORS[i]); placeOnPlanet(h, randDir()); h.rotateY(rng()*Math.PI*2); scene.add(h); }
+function placeHouse(color, dir){
+  const h=makeHouse(color); placeOnPlanet(h, dir); h.rotateY(rng()*Math.PI*2); scene.add(h);
+  colliders.push({dir:dir.clone().normalize(), r:0.85});
+}
+for(let i=0;i<5;i++) placeHouse(HOUSE_COLORS[i], randDir());
 
 // ---------- Mailboxes (delivery targets) ----------
 const mailboxes = [];
@@ -449,7 +474,7 @@ function makeMailbox(){
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,5,12,1,true),
     new THREE.MeshBasicMaterial({color:0xffe14d, transparent:true, opacity:0.12, side:THREE.DoubleSide}));
   beam.position.y=2.5;
-  g.add(post, box, flag, ring, beam);
+  g.add(post, box, flag, ring, beam, shadowDisc(0.5));
   g.userData = { ring, beam, flag, done:false };
   return g;
 }
@@ -464,9 +489,8 @@ for(let i=0;i<NUM_TASKS;i++){
   mb.userData.dir = dir.clone();
   mailboxes.push(mb); scene.add(mb);
   // small village around each mailbox
-  const house=makeHouse(HOUSE_COLORS[(i+1)%HOUSE_COLORS.length]);
-  placeOnPlanet(house, jitterDir(dir, 0.12)); house.rotateY(rng()*Math.PI*2); scene.add(house);
-  for(let k=0;k<3;k++){ const t=makeTree(); placeOnPlanet(t, jitterDir(dir,0.18)); scene.add(t); }
+  placeHouse(HOUSE_COLORS[(i+1)%HOUSE_COLORS.length], jitterDir(dir, 0.12));
+  for(let k=0;k<3;k++){ const td=jitterDir(dir,0.18); const t=makeTree(); placeOnPlanet(t, td); scene.add(t); colliders.push({dir:td.clone().normalize(), r:0.4}); }
   for(let k=0;k<6;k++){ const f=makeFlower(); placeOnPlanet(f, jitterDir(dir,0.16)); scene.add(f); }
   for(let k=0;k<4;k++){ const gr=makeGrass(); placeOnPlanet(gr, jitterDir(dir,0.15)); scene.add(gr); }
 }
@@ -505,6 +529,58 @@ const villageDirs = mailboxes.map(mb=>mb.userData.dir.clone());
 for(let i=0;i<villageDirs.length;i++){
   scene.add(makeRoad(villageDirs[i], villageDirs[(i+1)%villageDirs.length]));
 }
+
+// ---------- Stairs & bridges (decorative structures) ----------
+function makeStairs(steps=6){
+  const g=new THREE.Group();
+  const mat=new THREE.MeshStandardMaterial({color:0xcdbfa3, flatShading:true, roughness:1});
+  const sw=0.9, sh=0.13, sd=0.24;
+  for(let k=0;k<steps;k++){
+    const s=new THREE.Mesh(new THREE.BoxGeometry(sw, sh*(k+1), sd), mat);
+    s.position.set(0, sh*(k+1)/2, k*sd); s.castShadow=true; s.receiveShadow=true; g.add(s);
+  }
+  g.add(shadowDisc(0.7));
+  return g;
+}
+function makeBridge(len=3.2, width=0.9){
+  const g=new THREE.Group();
+  const wood=new THREE.MeshStandardMaterial({color:0x9c6b3f, flatShading:true, roughness:1});
+  const dark=new THREE.MeshStandardMaterial({color:0x7a4f2c, roughness:1});
+  const planks=12, arch=0.5;
+  for(let k=0;k<planks;k++){
+    const t=k/(planks-1), z=(t-0.5)*len, y=Math.sin(t*Math.PI)*arch+0.12;
+    const p=new THREE.Mesh(new THREE.BoxGeometry(width, 0.07, len/planks*0.92), wood);
+    p.position.set(0,y,z); p.castShadow=true; p.receiveShadow=true; g.add(p);
+  }
+  for(const side of [-1,1]){
+    for(let k=0;k<planks;k+=1){
+      const t=k/(planks-1), z=(t-0.5)*len, y=Math.sin(t*Math.PI)*arch+0.12;
+      const post=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.34,0.05), dark);
+      post.position.set(side*width/2, y+0.17, z); post.castShadow=true; g.add(post);
+    }
+  }
+  // arched support pillars at the banks
+  for(const z of [-len*0.4, len*0.4]){
+    const pil=new THREE.Mesh(new THREE.BoxGeometry(width*0.9,0.5,0.12), dark);
+    pil.position.set(0,-0.1,z); g.add(pil);
+  }
+  return g;
+}
+function placeStructure(obj, dir, fwd){
+  const up=dir.clone().normalize();
+  obj.position.copy(up.clone().multiplyScalar(terrainRadius(up)-0.03));
+  orient(obj, up, fwd || new THREE.Vector3(0,0,1));
+  scene.add(obj);
+}
+// a bridge straddling the road between two villages
+{
+  const a=villageDirs[0], b=villageDirs[1];
+  const mid=slerpDir(a,b,0.5), nxt=slerpDir(a,b,0.52);
+  placeStructure(makeBridge(3.2,0.9), mid, nxt.clone().sub(mid).normalize());
+}
+// stairs on a slope beside another village
+placeStructure(makeStairs(6), jitterDir(villageDirs[2], 0.1));
+placeStructure(makeStairs(5), jitterDir(villageDirs[3], 0.09));
 
 // ---------- Player ----------
 const player = new THREE.Group();
@@ -741,6 +817,28 @@ addEventListener('resize', ()=>{
   renderer.setSize(innerWidth, innerHeight);
 });
 
+// ---------- Collision ----------
+const PLAYER_R = 0.32;
+function resolveCollisions(){
+  for(const c of colliders){
+    const cosA = THREE.MathUtils.clamp(pUp.dot(c.dir), -1, 1);
+    const ang = Math.acos(cosA);
+    const minAng = (c.r + PLAYER_R) / PLANET_R;
+    if(ang < minAng){
+      let tan = pUp.clone().sub(c.dir.clone().multiplyScalar(cosA)); // direction away from obstacle
+      if(tan.lengthSq() < 1e-8){
+        tan = new THREE.Vector3(0,1,0).cross(c.dir);
+        if(tan.lengthSq() < 1e-8) tan = new THREE.Vector3(1,0,0).cross(c.dir);
+      }
+      tan.normalize();
+      const newUp = c.dir.clone().multiplyScalar(Math.cos(minAng))
+                     .add(tan.multiplyScalar(Math.sin(minAng))).normalize();
+      pPos.copy(newUp.multiplyScalar(PLANET_R));
+      reTangent();
+    }
+  }
+}
+
 // ---------- Loop ----------
 const clock=new THREE.Clock();
 const _camPos=new THREE.Vector3(), _camTarget=new THREE.Vector3();
@@ -777,6 +875,7 @@ function update(dt){
     pPos.copy(surface(pPos)); // clamp to radius
     reTangent();
   }
+  resolveCollisions();  // keep player out of trees & houses
 
   // jump / gravity
   if(keys['Space'] && grounded){ vAlt=JUMP_V; grounded=false; }
@@ -847,6 +946,10 @@ function update(dt){
     elCompass.style.opacity='0'; elPrompt.classList.remove('show');
   }
 }
+// keep image-based reflections subtle across every standard material
+scene.traverse(o=>{
+  if(o.material && 'envMapIntensity' in o.material){ o.material.envMapIntensity = ENV_INTENSITY; }
+});
 tick();
 </script>
 </body>
