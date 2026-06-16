@@ -730,14 +730,16 @@ addEventListener('keydown', e=>{
 });
 addEventListener('keyup', e=>{ keys[e.code]=false; });
 
-// camera orbit
-let camYaw = 0, camPitch = 0.5, camDist = 7;
+// camera: independent look direction so movement can be camera-relative
+let camPitch = 0.5, camDist = 7;
+let camDir = pFwd.clone();          // horizontal direction the camera looks along (tangent)
 let dragging=false, lastX=0, lastY=0;
 renderer.domElement.addEventListener('pointerdown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; });
 addEventListener('pointerup', ()=> dragging=false);
 addEventListener('pointermove', e=>{
   if(!dragging) return;
-  camYaw -= (e.clientX-lastX)*0.005;
+  camDir.applyAxisAngle(pUp, -(e.clientX-lastX)*0.005);                 // orbit look around up
+  camDir.sub(pUp.clone().multiplyScalar(camDir.dot(pUp))).normalize();
   camPitch = THREE.MathUtils.clamp(camPitch+(e.clientY-lastY)*0.005, -0.2, 1.2);
   lastX=e.clientX; lastY=e.clientY;
 });
@@ -908,31 +910,43 @@ function tick(){
   requestAnimationFrame(tick);
 }
 function update(dt){
-  // --- input -> turn & move ---
-  let turn=0, fwdInput=0;
-  if(keys['KeyA']||keys['ArrowLeft']) turn+=1;
-  if(keys['KeyD']||keys['ArrowRight']) turn-=1;
-  if(keys['KeyW']||keys['ArrowUp']) fwdInput+=1;
-  if(keys['KeyS']||keys['ArrowDown']) fwdInput-=1;
-  if(isTouch){ turn += -move.x; fwdInput += -move.y; }
+  // --- gather movement input as forward/right components, relative to the camera ---
+  let fComp=0, rComp=0;
+  if(keys['KeyW']||keys['ArrowUp'])    fComp+=1;
+  if(keys['KeyS']||keys['ArrowDown'])  fComp-=1;
+  if(keys['KeyD']||keys['ArrowRight']) rComp+=1;
+  if(keys['KeyA']||keys['ArrowLeft'])  rComp-=1;
+  if(isTouch){ fComp += -move.y; rComp += move.x; }   // joystick: up = into the view
 
-  // turn forward around up
-  if(turn!==0){
-    pFwd.applyAxisAngle(pUp, turn*TURN_SPEED*dt);
-    reTangent();
-  }
-  // move along surface (rotate position about axis up×fwd)
   let moving=false;
-  if(fwdInput!==0){
-    moving=true;
-    const dist=fwdInput*MOVE_SPEED*dt;
-    const ang=dist/PLANET_R;
-    const axis=new THREE.Vector3().crossVectors(pUp, pFwd).normalize();
-    const q=new THREE.Quaternion().setFromAxisAngle(axis, ang);
-    pPos.applyQuaternion(q);
-    pFwd.applyQuaternion(q);
-    pPos.copy(surface(pPos)); // clamp to radius
-    reTangent();
+  const inMag=Math.hypot(fComp,rComp);
+  if(inMag>0.12){
+    // desired heading in the tangent plane, built from where the camera looks
+    const viewYaw=(gyroOn?gyroYaw:0);
+    const vDir=camDir.clone().applyAxisAngle(pUp, viewYaw).normalize();
+    const vRight=new THREE.Vector3().crossVectors(pUp, vDir).normalize();
+    const D=vDir.multiplyScalar(fComp).add(vRight.multiplyScalar(rComp));
+    D.sub(pUp.clone().multiplyScalar(D.dot(pUp)));
+    if(D.lengthSq()>1e-6){
+      D.normalize();
+      moving=true;
+      // move position along D (great-circle), transporting facing + camera look with it
+      const dist=Math.min(1,inMag)*MOVE_SPEED*dt;
+      const axis=new THREE.Vector3().crossVectors(pUp, D).normalize();
+      const q=new THREE.Quaternion().setFromAxisAngle(axis, dist/PLANET_R);
+      pPos.applyQuaternion(q); pFwd.applyQuaternion(q); camDir.applyQuaternion(q);
+      pPos.copy(surface(pPos)); reTangent();
+      camDir.sub(pUp.clone().multiplyScalar(camDir.dot(pUp)));
+      if(camDir.lengthSq()<1e-6) camDir.copy(pFwd);
+      camDir.normalize();
+      // smoothly rotate the avatar to face the direction of travel
+      const cosA=THREE.MathUtils.clamp(pFwd.dot(D),-1,1), ang=Math.acos(cosA);
+      if(ang>1e-3){
+        const sign=Math.sign(new THREE.Vector3().crossVectors(pFwd,D).dot(pUp))||1;
+        pFwd.applyAxisAngle(pUp, Math.min(ang, 12*dt)*sign);
+        reTangent();
+      }
+    }
   }
   resolveCollisions();  // keep player out of trees & houses
 
@@ -980,12 +994,11 @@ function update(dt){
     if(sp.userData.life>1.6){ scene.remove(sp); emoteSprites.splice(i,1); }
   }
 
-  // --- camera (orbit behind player, on planet up) ---
+  // --- camera (orbit behind the look direction, on planet up) ---
   const up=pUp;
-  const yaw   = gyroOn ? gyroYaw : camYaw;
   const pitch = (gyroOn && gyroPitch!=null) ? gyroPitch : camPitch;
-  // build basis: forward in tangent, rotated by yaw around up
-  const f=pFwd.clone().applyAxisAngle(up, yaw).normalize();
+  // camera looks along camDir, plus an optional gyro offset
+  const f=camDir.clone().applyAxisAngle(up, gyroOn?gyroYaw:0).normalize();
   const back=f.clone().multiplyScalar(-1);
   const offsetDir=back.clone().multiplyScalar(Math.cos(pitch)).add(up.clone().multiplyScalar(Math.sin(pitch))).normalize();
   _camPos.copy(player.position).add(offsetDir.multiplyScalar(camDist)).add(up.clone().multiplyScalar(0.6));
