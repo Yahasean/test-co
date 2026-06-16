@@ -1087,6 +1087,33 @@ scene.traverse(o=>{
   if(o.material && 'envMapIntensity' in o.material){ o.material.envMapIntensity = ENV_INTENSITY; }
 });
 
+// ---------- Smooth shading: remove the hard faceted look ----------
+// Average face normals across shared vertex positions so rounded shapes shade
+// smoothly. Boxes stay crisp (their geometry keeps per-face normals).
+function smoothNormals(geo){
+  geo.computeVertexNormals();
+  const pos=geo.attributes.position, nrm=geo.attributes.normal, acc=new Map();
+  const key=i=>pos.getX(i).toFixed(3)+'_'+pos.getY(i).toFixed(3)+'_'+pos.getZ(i).toFixed(3);
+  for(let i=0;i<pos.count;i++){
+    const k=key(i); let a=acc.get(k); if(!a){ a=[0,0,0]; acc.set(k,a); }
+    a[0]+=nrm.getX(i); a[1]+=nrm.getY(i); a[2]+=nrm.getZ(i);
+  }
+  for(let i=0;i<pos.count;i++){
+    const a=acc.get(key(i)), l=Math.hypot(a[0],a[1],a[2])||1;
+    nrm.setXYZ(i, a[0]/l, a[1]/l, a[2]/l);
+  }
+  nrm.needsUpdate=true;
+}
+const _smoothed=new Set();
+scene.traverse(o=>{
+  if(o.geometry && o.geometry.index===null && !_smoothed.has(o.geometry)){
+    smoothNormals(o.geometry); _smoothed.add(o.geometry);   // faceted polyhedra -> smooth
+  }
+  if(o.material && 'flatShading' in o.material && o.material.flatShading){
+    o.material.flatShading=false; o.material.needsUpdate=true;
+  }
+});
+
 // ---------- Toon / cel shading (toggle, layered on the current render) ----------
 const toonGrad = (()=>{
   const d=new Uint8Array([105,170,235,255]);      // 4-band cel ramp (red channel)
