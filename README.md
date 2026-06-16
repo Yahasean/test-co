@@ -52,6 +52,21 @@ python3 -m http.server 8000
 | 星球地形 | `planetGeo` + 顏色區 `cValley/cGrass/cHill/cSand/cRock` | 起伏幅度改 `BUMP_AMP` |
 | 天空 | `skyMat` 的 `topCol/midCol/botCol` | |
 
-> 要換成真正的 3D 模型(glTF/GLB),可用 Three.js 的 `GLTFLoader` 載入後取代對應 `make*()` 的回傳物件即可。
+## 接入免費 glTF 模型
+
+`index.html` 內已備好載入管線,預設仍用程序化幾何,缺檔會自動退回:
+
+1. 把 CC0 的 `.glb` 放進 `models/`(Pages 同源服務),或用支援 CORS 的 CDN 連結。
+2. 在 `MODELS` 設定填上 url,例如人物:
+   ```js
+   const MODELS = { character: { url:'models/courier.glb', height:1.1, rotY:Math.PI } };
+   ```
+3. 人物會自動正規化大小、置中,並用 `AnimationMixer` 依移動狀態播 idle / walk 動畫。
+
+推薦 CC0 來源:Kenney(Nature Kit、City Kit Suburban)、Quaternius(Animated Men Pack、Ultimate Stylized Nature)、Poly Pizza(可篩 CC0)。
+
+## 實驗功能:表情控制(挑眉跳躍)
+
+右上「😮 表情控制」會用 [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe) 在瀏覽器內讀臉部 blendshape,**挑眉**(`browInnerUp`)即觸發跳躍。需相機權限與 HTTPS,運算全在裝置端、不上傳。
 
 > 本作為玩法/視覺概念的獨立復刻,與 Abeto 原作無關,僅供學習測試之用。

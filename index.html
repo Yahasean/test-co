@@ -82,6 +82,12 @@
     backdrop-filter: blur(6px); cursor: pointer; }
   #toonBtn.on { background: rgba(232,150,40,.92); border-color: rgba(255,255,255,.5); }
 
+  #faceBtn { position: fixed; top: 136px; right: 16px; z-index: 30; pointer-events: auto;
+    background: rgba(30,40,60,.55); color: #fff; border: 1px solid rgba(255,255,255,.3);
+    border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600;
+    backdrop-filter: blur(6px); cursor: pointer; }
+  #faceBtn.on { background: rgba(60,170,120,.92); border-color: rgba(255,255,255,.5); }
+
   /* Mobile buttons */
   #mobile { position: fixed; inset: 0; pointer-events: none; display: none; }
   .stick { position: absolute; bottom: 30px; pointer-events: auto; }
@@ -136,6 +142,7 @@
 <button id="gyroBtn">📱 體感視角</button>
 <button id="fxBtn">✨ 特效</button>
 <button id="toonBtn">🎨 卡通</button>
+<button id="faceBtn">😮 表情控制</button>
 
 <div id="mobile">
   <div id="stickL" class="stick"><div class="pad"><div class="knob" id="knobL"></div></div></div>
@@ -182,6 +189,8 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 
 // ---------- Config ----------
 const PLANET_R = 16;          // planet radius (small => visible curvature)
@@ -761,10 +770,46 @@ function makePlayer(){
   g.userData={legL,legR,armL,armR};
   return g;
 }
-const avatar = makePlayer();
+let avatar = makePlayer();
 avatar.scale.setScalar(0.78);   // scale courier down a touch (was a bit large vs houses)
 player.add(avatar);
 scene.add(player);
+
+// ---------- Optional glTF model pipeline (CC0 packs, no assets bundled yet) ----------
+// Fill a url to swap a procedural object for a real model. Drop GLBs in /models/
+// (served same-origin by Pages) or point at a CORS-enabled CDN url.
+//   character: { url:'models/courier.glb', height:1.1, rotY:Math.PI }
+const MODELS = { character: null /*, house:null, tree:null, mailbox:null */ };
+const gltfLoader = new GLTFLoader();
+function loadGLB(url){ return new Promise((res,rej)=> gltfLoader.load(url, res, undefined, rej)); }
+function normalizeModel(obj, targetH, opts={}){
+  const box=new THREE.Box3().setFromObject(obj), size=new THREE.Vector3();
+  box.getSize(size);
+  obj.scale.setScalar((targetH/(size.y||1))*(opts.scale||1));
+  box.setFromObject(obj); obj.position.y -= box.min.y;     // feet to local origin
+  if(opts.rotY) obj.rotateY(opts.rotY);
+  obj.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; } });
+}
+// character live-swap with idle/walk animation
+let charIsModel=false, charMixer=null; const charAct={};
+async function trySwapCharacter(){
+  const cfg=MODELS.character; if(!cfg || !cfg.url) return;
+  try{
+    const gltf=await loadGLB(cfg.url);
+    const model=gltf.scene;
+    normalizeModel(model, cfg.height||1.1, cfg);
+    player.remove(avatar); player.add(model); avatar=model; charIsModel=true;
+    if(gltf.animations && gltf.animations.length){
+      charMixer=new THREE.AnimationMixer(model);
+      const pick=ns=>gltf.animations.find(a=>ns.some(n=>a.name.toLowerCase().includes(n)));
+      const idle=pick(['idle','stand','breath']), walk=pick(['walk','run','jog']);
+      if(idle){ charAct.idle=charMixer.clipAction(idle); charAct.idle.play(); }
+      if(walk){ charAct.walk=charMixer.clipAction(walk); charAct.walk.play(); charAct.walk.weight=0; }
+    }
+    // loaded materials pick up the same toon/smooth treatment on next style toggle
+  }catch(err){ console.warn('character model load failed, keeping procedural avatar:', err); }
+}
+trySwapCharacter();
 
 // player state on sphere
 let pPos = surface(new THREE.Vector3(0,1,0.2)); // start near "north"
@@ -1051,7 +1096,12 @@ function update(dt){
 
   // walk animation
   const tNow=performance.now()*0.001;
-  if(moving && grounded){
+  if(charIsModel){
+    if(charMixer) charMixer.update(dt);
+    const w=(moving && grounded)?1:0;                           // crossfade walk/idle
+    if(charAct.walk) charAct.walk.weight=THREE.MathUtils.lerp(charAct.walk.weight, w, 0.18);
+    if(charAct.idle) charAct.idle.weight=THREE.MathUtils.lerp(charAct.idle.weight, 1-w, 0.18);
+  } else if(moving && grounded){
     walkPhase+=dt*10;
     const s=Math.sin(walkPhase)*0.4;
     avatar.userData.legL.rotation.x=s; avatar.userData.legR.rotation.x=-s;
@@ -1168,6 +1218,48 @@ function setToon(on){
 }
 toonBtn.addEventListener('click', ()=> setToon(!toonOn));
 setToon(true);   // cartoon look on by default
+
+// ---------- Experimental: face control (raise eyebrows to jump) ----------
+function triggerJump(){ if(grounded){ vAlt=JUMP_V; grounded=false; } }
+let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, browArmed=true;
+const faceBtn=document.getElementById('faceBtn');
+const BROW_UP=0.55, BROW_DOWN=0.3;      // hysteresis so one raise = one jump
+faceBtn.addEventListener('click', async ()=>{
+  if(faceOn){ stopFace(); return; }
+  faceBtn.textContent='😮 載入中…';
+  try{
+    const vision = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14');
+    const fileset = await vision.FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm');
+    faceLandmarker = await vision.FaceLandmarker.createFromOptions(fileset, {
+      baseOptions:{ modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task', delegate:'GPU' },
+      outputFaceBlendshapes:true, runningMode:'VIDEO', numFaces:1
+    });
+    const stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:'user', width:320, height:240 }, audio:false });
+    faceVideo = document.createElement('video');
+    faceVideo.srcObject=stream; faceVideo.muted=true; faceVideo.playsInline=true; faceVideo.setAttribute('playsinline','');
+    await faceVideo.play();
+    faceOn=true; faceBtn.classList.add('on'); faceBtn.textContent='😮 挑眉跳';
+    faceLoop();
+  }catch(err){ console.warn('Face control failed:', err); faceBtn.textContent='😮 不支援'; stopFace(); }
+});
+function stopFace(){
+  faceOn=false; faceBtn.classList.remove('on');
+  if(!/不支援|載入/.test(faceBtn.textContent)) faceBtn.textContent='😮 表情控制';
+  if(faceRAF) cancelAnimationFrame(faceRAF);
+  if(faceVideo && faceVideo.srcObject){ faceVideo.srcObject.getTracks().forEach(t=>t.stop()); faceVideo.srcObject=null; }
+}
+function faceLoop(){
+  if(!faceOn) return;
+  faceRAF=requestAnimationFrame(faceLoop);
+  if(!faceLandmarker || !faceVideo || faceVideo.readyState<2) return;
+  let res; try{ res=faceLandmarker.detectForVideo(faceVideo, performance.now()); }catch(e){ return; }
+  const cat = res && res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories;
+  if(!cat) return;
+  const get=n=>{ const c=cat.find(x=>x.categoryName===n); return c?c.score:0; };
+  const brow=Math.max(get('browInnerUp'), (get('browOuterUpLeft')+get('browOuterUpRight'))/2);
+  if(browArmed && brow>BROW_UP){ browArmed=false; if(started) triggerJump(); }
+  else if(!browArmed && brow<BROW_DOWN){ browArmed=true; }   // re-arm when brows relax
+}
 
 tick();
 </script>
