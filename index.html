@@ -762,6 +762,7 @@ function makePlayer(){
   return g;
 }
 const avatar = makePlayer();
+avatar.scale.setScalar(0.78);   // scale courier down a touch (was a bit large vs houses)
 player.add(avatar);
 scene.add(player);
 
@@ -790,7 +791,7 @@ addEventListener('keydown', e=>{
 addEventListener('keyup', e=>{ keys[e.code]=false; });
 
 // camera: independent look direction so movement can be camera-relative
-let camPitch = 0.5, camDist = 7;
+let camPitch = 0.5, camDist = 6.2;
 let camDir = pFwd.clone();          // horizontal direction the camera looks along (tangent)
 let dragging=false, lastX=0, lastY=0;
 renderer.domElement.addEventListener('pointerdown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; });
@@ -939,7 +940,7 @@ addEventListener('resize', ()=>{
 });
 
 // ---------- Collision ----------
-const PLAYER_R = 0.32;
+const PLAYER_R = 0.27;
 function resolveCollisions(){
   for(const c of colliders){
     const cosA = THREE.MathUtils.clamp(pUp.dot(c.dir), -1, 1);
