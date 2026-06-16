@@ -159,8 +159,29 @@ const DELIVER_RANGE = 2.4;
 // ---------- Scene ----------
 const app = document.getElementById('app');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87c5e8);
-scene.fog = new THREE.Fog(0x9fd2ee, 30, 70);
+scene.background = new THREE.Color(0xcfeafe);
+scene.fog = new THREE.Fog(0xcfeafe, 34, 78);
+
+// Gradient sky dome
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide, depthWrite: false, fog: false,
+  uniforms: {
+    topCol: { value: new THREE.Color(0x4a93cf) },
+    midCol: { value: new THREE.Color(0x9bd2f0) },
+    botCol: { value: new THREE.Color(0xeaf7ff) }
+  },
+  vertexShader: `varying vec3 vP; void main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
+  fragmentShader: `
+    varying vec3 vP; uniform vec3 topCol; uniform vec3 midCol; uniform vec3 botCol;
+    void main(){
+      float h = normalize(vP).y * 0.5 + 0.5;
+      vec3 c = h < 0.5 ? mix(botCol, midCol, smoothstep(0.0,0.5,h))
+                       : mix(midCol, topCol, smoothstep(0.5,1.0,h));
+      gl_FragColor = vec4(c, 1.0);
+    }`
+});
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(170, 32, 16), skyMat);
+scene.add(skyDome);
 
 const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 400);
 
@@ -179,9 +200,13 @@ sun.shadow.mapSize.set(2048, 2048);
 sun.shadow.camera.near = 1; sun.shadow.camera.far = 120;
 sun.shadow.camera.left = -40; sun.shadow.camera.right = 40;
 sun.shadow.camera.top = 40; sun.shadow.camera.bottom = -40;
+sun.shadow.radius = 4; sun.shadow.bias = -0.0004;
 scene.add(sun);
-scene.add(new THREE.HemisphereLight(0xbfe3ff, 0x4a7a3a, 0.85));
-scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+scene.add(new THREE.HemisphereLight(0xcfe9ff, 0x5a8a4a, 0.9));
+scene.add(new THREE.AmbientLight(0xfff3e0, 0.22));
+const rim = new THREE.DirectionalLight(0xa9d8ff, 0.5); // cool back rim light
+rim.position.set(-25, 10, -30);
+scene.add(rim);
 
 // Stars / clouds far backdrop (simple)
 const cloudGroup = new THREE.Group();
@@ -212,8 +237,30 @@ for (let i=0;i<pos.count;i++){
   pos.setXYZ(i, v.x, v.y, v.z);
 }
 planetGeo.computeVertexNormals();
+// per-vertex biome colours for richer terrain
+const cValley = new THREE.Color(0x3f8a3c);
+const cGrass  = new THREE.Color(0x6cb24a);
+const cHill   = new THREE.Color(0x8fc862);
+const cSand   = new THREE.Color(0xdcc98f);
+const cRock   = new THREE.Color(0x9c9a8c);
+const colArr = [];
+const _c = new THREE.Color();
+for (let i=0;i<pos.count;i++){
+  v.fromBufferAttribute(pos,i);
+  const n = v.clone().normalize();
+  const h = v.length() - PLANET_R;                  // -0.55..0.55
+  const sand = Math.sin(n.x*5.2+1.3)*Math.cos(n.z*4.7); // patchy sandy zones
+  if (h > 0.32) _c.copy(cRock);
+  else if (sand > 0.78) _c.copy(cSand);
+  else if (h > 0.12) _c.copy(cHill);
+  else if (h < -0.18) _c.copy(cValley);
+  else _c.copy(cGrass);
+  _c.offsetHSL(0, 0, (hash(i*1.7)-0.5)*0.04);        // subtle tonal noise
+  colArr.push(_c.r, _c.g, _c.b);
+}
+planetGeo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3));
 const planet = new THREE.Mesh(planetGeo, new THREE.MeshStandardMaterial({
-  color: 0x69b04a, flatShading: true, roughness: 0.95
+  vertexColors: true, flatShading: true, roughness: 0.95
 }));
 planet.receiveShadow = true;
 scene.add(planet);
@@ -239,40 +286,132 @@ function placeOnPlanet(obj, dir){
   obj.position.copy(up.clone().multiplyScalar(PLANET_R - 0.05));
   orient(obj, up, new THREE.Vector3(0,0,1));
 }
+const LEAF_COLORS = [0x3f8f3a, 0x4fa046, 0x5cae4e, 0x47953f, 0x6cae3c];
 function makeTree(){
   const g = new THREE.Group();
-  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.18,0.7,6),
+  const s = THREE.MathUtils.randFloat(0.85, 1.3);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.1,0.18,0.7,6),
     new THREE.MeshStandardMaterial({color:0x8a5a2b, flatShading:true, roughness:1}));
   trunk.position.y = 0.35; trunk.castShadow=true;
-  const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(0.6,0),
-    new THREE.MeshStandardMaterial({color:0x3f8f3a, flatShading:true, roughness:1}));
-  leaf.position.y = 1.0; leaf.castShadow=true; leaf.scale.set(1,1.2,1);
-  g.add(trunk, leaf);
+  const lc = LEAF_COLORS[(Math.random()*LEAF_COLORS.length)|0];
+  const lmat = new THREE.MeshStandardMaterial({color:lc, flatShading:true, roughness:1});
+  const l1 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55,0), lmat);
+  l1.position.y=0.95; l1.castShadow=true;
+  const l2 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.4,0), lmat);
+  l2.position.set(0.25,1.25,0.1); l2.castShadow=true;
+  const l3 = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34,0), lmat);
+  l3.position.set(-0.2,1.2,-0.1); l3.castShadow=true;
+  g.add(trunk,l1,l2,l3); g.scale.setScalar(s);
+  return g;
+}
+function makePine(){
+  const g = new THREE.Group();
+  const s = THREE.MathUtils.randFloat(0.9, 1.4);
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.08,0.13,0.5,6),
+    new THREE.MeshStandardMaterial({color:0x7a4a26, roughness:1}));
+  trunk.position.y=0.25; trunk.castShadow=true; g.add(trunk);
+  const pmat = new THREE.MeshStandardMaterial({color:0x2f7a3e, flatShading:true, roughness:1});
+  for(let k=0;k<3;k++){
+    const cone=new THREE.Mesh(new THREE.ConeGeometry(0.5-k*0.12, 0.55, 7), pmat);
+    cone.position.y=0.6+k*0.38; cone.castShadow=true; g.add(cone);
+  }
+  g.scale.setScalar(s); return g;
+}
+function makeBush(){
+  const g = new THREE.Group();
+  const m = new THREE.MeshStandardMaterial({color:0x4e9c44, flatShading:true, roughness:1});
+  for(let k=0;k<3;k++){
+    const b=new THREE.Mesh(new THREE.IcosahedronGeometry(THREE.MathUtils.randFloat(0.18,0.28),0), m);
+    b.position.set((Math.random()-0.5)*0.4, 0.18, (Math.random()-0.5)*0.4); b.castShadow=true; g.add(b);
+  }
+  return g;
+}
+function makeGrass(){
+  const m = new THREE.MeshStandardMaterial({color:0x7cc24a, flatShading:true, roughness:1});
+  const g = new THREE.Group();
+  for(let k=0;k<3;k++){
+    const blade=new THREE.Mesh(new THREE.ConeGeometry(0.05,0.32,4), m);
+    blade.position.set((Math.random()-0.5)*0.18,0.16,(Math.random()-0.5)*0.18);
+    blade.rotation.z=(Math.random()-0.5)*0.3; g.add(blade);
+  }
+  return g;
+}
+const FLOWER_COLORS=[0xff6b8a,0xffd23f,0xff8c42,0xb07cff,0xffffff];
+function makeFlower(){
+  const g=new THREE.Group();
+  const stem=new THREE.Mesh(new THREE.CylinderGeometry(0.015,0.015,0.22,4),
+    new THREE.MeshStandardMaterial({color:0x4e9c44})); stem.position.y=0.11; g.add(stem);
+  const head=new THREE.Mesh(new THREE.IcosahedronGeometry(0.07,0),
+    new THREE.MeshStandardMaterial({color:FLOWER_COLORS[(Math.random()*FLOWER_COLORS.length)|0], flatShading:true}));
+  head.position.y=0.24; g.add(head);
+  return g;
+}
+function makeMushroom(){
+  const g=new THREE.Group();
+  const stem=new THREE.Mesh(new THREE.CylinderGeometry(0.05,0.06,0.16,6),
+    new THREE.MeshStandardMaterial({color:0xf3ece0, roughness:1})); stem.position.y=0.08; g.add(stem);
+  const cap=new THREE.Mesh(new THREE.SphereGeometry(0.12,10,8,0,Math.PI*2,0,Math.PI*0.5),
+    new THREE.MeshStandardMaterial({color:0xd84a3a, flatShading:true, roughness:1}));
+  cap.position.y=0.16; cap.castShadow=true; g.add(cap);
   return g;
 }
 function makeRock(){
-  const r = new THREE.Mesh(new THREE.DodecahedronGeometry(THREE.MathUtils.randFloat(0.25,0.5),0),
+  const r = new THREE.Mesh(new THREE.DodecahedronGeometry(THREE.MathUtils.randFloat(0.22,0.5),0),
     new THREE.MeshStandardMaterial({color:0x9aa0a6, flatShading:true, roughness:1}));
-  r.castShadow=true; r.position.y=0.2; return r;
+  r.castShadow=true; r.position.y=0.18; r.rotation.set(Math.random(),Math.random(),Math.random()); return r;
 }
 function makeHouse(color){
   const g = new THREE.Group();
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.1,0.9,1.1),
-    new THREE.MeshStandardMaterial({color, flatShading:true, roughness:1}));
-  body.position.y=0.45; body.castShadow=true; body.receiveShadow=true;
-  const roof = new THREE.Mesh(new THREE.ConeGeometry(0.95,0.6,4),
-    new THREE.MeshStandardMaterial({color:0xb6452f, flatShading:true, roughness:1}));
-  roof.position.y=1.2; roof.rotation.y=Math.PI/4; roof.castShadow=true;
-  g.add(body, roof);
+  const w = THREE.MathUtils.randFloat(1.0,1.3), h = THREE.MathUtils.randFloat(0.8,1.05);
+  const wall = new THREE.MeshStandardMaterial({color, flatShading:true, roughness:1});
+  const body = new THREE.Mesh(new THREE.BoxGeometry(w,h,w), wall);
+  body.position.y=h/2; body.castShadow=true; body.receiveShadow=true; g.add(body);
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(w*0.85,0.6,4),
+    new THREE.MeshStandardMaterial({color:[0xb6452f,0x8a5a8f,0x4f7aa0][(Math.random()*3)|0], flatShading:true, roughness:1}));
+  roof.position.y=h+0.28; roof.rotation.y=Math.PI/4; roof.castShadow=true; g.add(roof);
+  // door
+  const door=new THREE.Mesh(new THREE.BoxGeometry(0.26,0.42,0.05),
+    new THREE.MeshStandardMaterial({color:0x6b4a2b, roughness:1}));
+  door.position.set(0,0.21,w/2+0.01); g.add(door);
+  // windows
+  const wmat=new THREE.MeshStandardMaterial({color:0xfff2b0, emissive:0x55430a, roughness:.6});
+  for(const dx of [-w*0.28, w*0.28]){
+    const win=new THREE.Mesh(new THREE.BoxGeometry(0.2,0.2,0.05), wmat);
+    win.position.set(dx,h*0.62,w/2+0.01); g.add(win);
+  }
+  // chimney
+  const ch=new THREE.Mesh(new THREE.BoxGeometry(0.16,0.34,0.16),
+    new THREE.MeshStandardMaterial({color:0x7a5a4a, roughness:1}));
+  ch.position.set(w*0.25,h+0.32,-w*0.2); ch.castShadow=true; g.add(ch);
   return g;
 }
 
 const rng = (()=>{ let s=1337; return ()=> (s=(s*16807)%2147483647)/2147483647; })();
 function randDir(){ return new THREE.Vector3(rng()*2-1, rng()*2-1, rng()*2-1).normalize(); }
 
-for(let i=0;i<60;i++){ const t=makeTree(); placeOnPlanet(t, randDir()); scene.add(t); }
-for(let i=0;i<30;i++){ const r=makeRock(); placeOnPlanet(r, randDir()); scene.add(r); }
-for(let i=0;i<6;i++){ const h=makeHouse([0xe8c07a,0xd98c6a,0x8fb3d9,0xc6d98c,0xd9a8c6,0xa8c6d9][i]); placeOnPlanet(h, randDir()); scene.add(h); }
+// place an object near a base direction with a small angular jitter
+function jitterDir(base, spread){
+  const t1=new THREE.Vector3(0,1,0).cross(base); if(t1.lengthSq()<1e-4) t1.set(1,0,0); t1.normalize();
+  const t2=new THREE.Vector3().crossVectors(base,t1).normalize();
+  const a=(rng()*2-1)*spread, b=(rng()*2-1)*spread;
+  return base.clone().add(t1.multiplyScalar(a)).add(t2.multiplyScalar(b)).normalize();
+}
+function scatter(makeFn, n, randomYaw=true){
+  for(let i=0;i<n;i++){
+    const o=makeFn(); placeOnPlanet(o, randDir());
+    if(randomYaw) o.rotateY(rng()*Math.PI*2);
+    scene.add(o);
+  }
+}
+scatter(makeTree, 38);
+scatter(makePine, 22);
+scatter(makeBush, 30);
+scatter(makeGrass, 120);
+scatter(makeFlower, 80);
+scatter(makeMushroom, 16);
+scatter(makeRock, 26);
+const HOUSE_COLORS=[0xe8c07a,0xd98c6a,0x8fb3d9,0xc6d98c,0xd9a8c6,0xa8c6d9,0xeac98c];
+for(let i=0;i<5;i++){ const h=makeHouse(HOUSE_COLORS[i]); placeOnPlanet(h, randDir()); h.rotateY(rng()*Math.PI*2); scene.add(h); }
 
 // ---------- Mailboxes (delivery targets) ----------
 const mailboxes = [];
@@ -308,6 +447,12 @@ for(let i=0;i<NUM_TASKS;i++){
   placeOnPlanet(mb, dir);
   mb.userData.dir = dir.clone();
   mailboxes.push(mb); scene.add(mb);
+  // small village around each mailbox
+  const house=makeHouse(HOUSE_COLORS[(i+1)%HOUSE_COLORS.length]);
+  placeOnPlanet(house, jitterDir(dir, 0.12)); house.rotateY(rng()*Math.PI*2); scene.add(house);
+  for(let k=0;k<3;k++){ const t=makeTree(); placeOnPlanet(t, jitterDir(dir,0.18)); scene.add(t); }
+  for(let k=0;k<6;k++){ const f=makeFlower(); placeOnPlanet(f, jitterDir(dir,0.16)); scene.add(f); }
+  for(let k=0;k<4;k++){ const gr=makeGrass(); placeOnPlanet(gr, jitterDir(dir,0.15)); scene.add(gr); }
 }
 
 // ---------- Player ----------
@@ -340,11 +485,34 @@ function makePlayer(){
   const armMat=new THREE.MeshStandardMaterial({color:shirt, roughness:1});
   const armL=new THREE.Mesh(armGeo,armMat); armL.position.set(-0.3,0.6,0); armL.castShadow=true;
   const armR=new THREE.Mesh(armGeo,armMat); armR.position.set(0.3,0.6,0); armR.castShadow=true;
-  // satchel
+  // satchel + strap
   const satchel=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.3,0.16),
     new THREE.MeshStandardMaterial({color:bag, flatShading:true, roughness:1}));
-  satchel.position.set(0.18,0.5,-0.2); satchel.castShadow=true;
-  g.add(body,head,hairM,cap,peak,legL,legR,armL,armR,satchel);
+  satchel.position.set(0.2,0.45,-0.22); satchel.castShadow=true;
+  const flap=new THREE.Mesh(new THREE.BoxGeometry(0.36,0.14,0.17),
+    new THREE.MeshStandardMaterial({color:0xa9721f, roughness:1}));
+  flap.position.set(0.2,0.56,-0.22);
+  const strap=new THREE.Mesh(new THREE.TorusGeometry(0.26,0.025,6,16),
+    new THREE.MeshStandardMaterial({color:0x8a5a1c, roughness:1}));
+  strap.position.set(0,0.55,0); strap.rotation.set(Math.PI/2.3,0,0.5);
+  // eyes
+  const eyeMat=new THREE.MeshStandardMaterial({color:0x2b2320, roughness:.5});
+  const eyeGeo=new THREE.SphereGeometry(0.032,8,8);
+  const eyeL=new THREE.Mesh(eyeGeo,eyeMat); eyeL.position.set(-0.08,1.02,0.21);
+  const eyeR=new THREE.Mesh(eyeGeo,eyeMat); eyeR.position.set(0.08,1.02,0.21);
+  // rosy cheeks
+  const cheekMat=new THREE.MeshStandardMaterial({color:0xff9a8a, roughness:1, transparent:true, opacity:.6});
+  const ckL=new THREE.Mesh(new THREE.SphereGeometry(0.035,8,8),cheekMat); ckL.position.set(-0.14,0.96,0.19);
+  const ckR=new THREE.Mesh(new THREE.SphereGeometry(0.035,8,8),cheekMat); ckR.position.set(0.14,0.96,0.19);
+  // scarf
+  const scarf=new THREE.Mesh(new THREE.TorusGeometry(0.2,0.05,6,16),
+    new THREE.MeshStandardMaterial({color:0xe0533d, flatShading:true, roughness:1}));
+  scarf.position.set(0,0.82,0); scarf.rotation.x=Math.PI/2;
+  // a letter held in the left hand
+  const letter=new THREE.Mesh(new THREE.BoxGeometry(0.2,0.14,0.02),
+    new THREE.MeshStandardMaterial({color:0xfdf6e3, roughness:.8}));
+  letter.position.set(-0.34,0.46,0.12); letter.rotation.set(0.3,0,0.2); letter.castShadow=true;
+  g.add(body,head,hairM,cap,peak,legL,legR,armL,armR,satchel,flap,strap,eyeL,eyeR,ckL,ckR,scarf,letter);
   g.userData={legL,legR,armL,armR};
   return g;
 }
@@ -547,14 +715,17 @@ function update(dt){
   orient(player, pUp, pFwd);
 
   // walk animation
+  const tNow=performance.now()*0.001;
   if(moving && grounded){
     walkPhase+=dt*10;
     const s=Math.sin(walkPhase)*0.4;
     avatar.userData.legL.rotation.x=s; avatar.userData.legR.rotation.x=-s;
     avatar.userData.armL.rotation.x=-s; avatar.userData.armR.rotation.x=s;
+    avatar.position.y=Math.abs(Math.sin(walkPhase))*0.06;       // walk bounce
   } else {
     avatar.userData.legL.rotation.x*=0.8; avatar.userData.legR.rotation.x*=0.8;
     avatar.userData.armL.rotation.x*=0.8; avatar.userData.armR.rotation.x*=0.8;
+    avatar.position.y=Math.sin(tNow*2)*0.018;                   // idle breathing
   }
 
   // animate mailbox rings
