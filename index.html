@@ -283,11 +283,16 @@ function terrainRadius(dir){ return PLANET_R + bumpAt(dir.clone().normalize())*B
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion();
 function orient(obj, up, fwd){
   const u = up.clone().normalize();
-  let f = fwd.clone().sub(u.clone().multiplyScalar(fwd.dot(u))).normalize();
-  if (f.lengthSq() < 1e-6) f.set(1,0,0);
+  // forward projected onto the tangent plane
+  let f = fwd.clone().sub(u.clone().multiplyScalar(fwd.dot(u)));
+  if (f.lengthSq() < 1e-8){                       // fwd ~parallel to up: pick any tangent
+    f.copy(Math.abs(u.y) < 0.99 ? new THREE.Vector3(0,1,0) : new THREE.Vector3(1,0,0));
+    f.sub(u.clone().multiplyScalar(f.dot(u)));
+  }
+  f.normalize();
   const right = new THREE.Vector3().crossVectors(u, f).normalize();
-  const f2 = new THREE.Vector3().crossVectors(right, u).normalize();
-  _m.makeBasis(right, u, f2.multiplyScalar(-1)); // model faces -Z
+  // proper right-handed rotation: x=right, y=up, z=forward (model front = +Z)
+  _m.makeBasis(right, u, f);
   obj.quaternion.setFromRotationMatrix(_m);
 }
 
