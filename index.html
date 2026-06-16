@@ -413,6 +413,8 @@ function placeOnPlanet(obj, dir){
 }
 // obstacles the player can't walk through: {dir:unit, r:radius}
 const colliders = [];
+// placed instances that a glTF model can replace later
+const swappables = { tree:[], house:[] };
 // soft contact shadow under props — cheap fake-baked AO that grounds objects
 function shadowDisc(r){
   const m = new THREE.Mesh(new THREE.CircleGeometry(r, 18),
@@ -531,17 +533,18 @@ function jitterDir(base, spread){
   const a=(rng()*2-1)*spread, b=(rng()*2-1)*spread;
   return base.clone().add(t1.multiplyScalar(a)).add(t2.multiplyScalar(b)).normalize();
 }
-function scatter(makeFn, n, collideR=0){
+function scatter(makeFn, n, collideR=0, type=null){
   for(let i=0;i<n;i++){
     const dir=randDir();
     const o=makeFn(); placeOnPlanet(o, dir);
     o.rotateY(rng()*Math.PI*2);
     scene.add(o);
     if(collideR>0) colliders.push({dir:dir.clone().normalize(), r:collideR});
+    if(type && swappables[type]) swappables[type].push(o);
   }
 }
-scatter(makeTree, 38, 0.4);
-scatter(makePine, 22, 0.4);
+scatter(makeTree, 38, 0.4, 'tree');
+scatter(makePine, 22, 0.4, 'tree');
 scatter(makeBush, 30);
 scatter(makeGrass, 120);
 scatter(makeFlower, 80);
@@ -551,6 +554,7 @@ const HOUSE_COLORS=[0xe8c07a,0xd98c6a,0x8fb3d9,0xc6d98c,0xd9a8c6,0xa8c6d9,0xeac9
 function placeHouse(color, dir){
   const h=makeHouse(color); placeOnPlanet(h, dir); h.rotateY(rng()*Math.PI*2); scene.add(h);
   colliders.push({dir:dir.clone().normalize(), r:0.85});
+  swappables.house.push(h);
 }
 for(let i=0;i<5;i++) placeHouse(HOUSE_COLORS[i], randDir());
 
@@ -590,7 +594,7 @@ for(let i=0;i<NUM_TASKS;i++){
   mailboxes.push(mb); scene.add(mb);
   // small village around each mailbox
   placeHouse(HOUSE_COLORS[(i+1)%HOUSE_COLORS.length], jitterDir(dir, 0.12));
-  for(let k=0;k<3;k++){ const td=jitterDir(dir,0.18); const t=makeTree(); placeOnPlanet(t, td); scene.add(t); colliders.push({dir:td.clone().normalize(), r:0.4}); }
+  for(let k=0;k<3;k++){ const td=jitterDir(dir,0.18); const t=makeTree(); placeOnPlanet(t, td); scene.add(t); colliders.push({dir:td.clone().normalize(), r:0.4}); swappables.tree.push(t); }
   for(let k=0;k<6;k++){ const f=makeFlower(); placeOnPlanet(f, jitterDir(dir,0.16)); scene.add(f); }
   for(let k=0;k<4;k++){ const gr=makeGrass(); placeOnPlanet(gr, jitterDir(dir,0.15)); scene.add(gr); }
 }
@@ -779,7 +783,10 @@ scene.add(player);
 // Fill a url to swap a procedural object for a real model. Drop GLBs in /models/
 // (served same-origin by Pages) or point at a CORS-enabled CDN url.
 //   character: { url:'models/courier.glb', height:1.1, rotY:Math.PI }
-const MODELS = { character: null /*, house:null, tree:null, mailbox:null */ };
+//   character: { url:'models/courier.glb', height:1.1, rotY:Math.PI }
+//   tree:      { url:'models/tree.glb',    height:1.6 }
+//   house:     { url:'models/house.glb',   height:1.6 }
+const MODELS = { character: null, tree: null, house: null };
 const gltfLoader = new GLTFLoader();
 function loadGLB(url){ return new Promise((res,rej)=> gltfLoader.load(url, res, undefined, rej)); }
 function normalizeModel(obj, targetH, opts={}){
@@ -790,6 +797,36 @@ function normalizeModel(obj, targetH, opts={}){
   if(opts.rotY) obj.rotateY(opts.rotY);
   obj.traverse(o=>{ if(o.isMesh){ o.castShadow=true; o.receiveShadow=true; } });
 }
+// bring a freshly-loaded model into the game's smooth + toon + AO look
+function styleModel(root){
+  root.traverse(o=>{
+    if(o.geometry && o.geometry.index===null && !_smoothed.has(o.geometry)){ smoothNormals(o.geometry); _smoothed.add(o.geometry); }
+    if(o.material && 'flatShading' in o.material && o.material.flatShading){ o.material.flatShading=false; o.material.needsUpdate=true; }
+    if(o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity=ENV_INTENSITY;
+    if(o.material && o.material.isMeshStandardMaterial){
+      const s=o.material;
+      const t=new THREE.MeshToonMaterial({ color:s.color.clone(), map:s.map||null, gradientMap:toonGrad,
+        vertexColors:s.vertexColors, transparent:s.transparent, opacity:s.opacity, side:s.side,
+        flatShading:false, emissive:(s.emissive?s.emissive.clone():new THREE.Color(0)) });
+      toonPairs.push({o, std:s, toon:t});
+      o.material = toonOn ? t : s;
+    }
+  });
+}
+// replace every placed instance of a type (tree/house) with a model clone
+async function applyModel(type, cfg){
+  if(!cfg || !cfg.url || !swappables[type]) return;
+  try{
+    const gltf=await loadGLB(cfg.url);
+    for(const obj of swappables[type]){
+      const m=skeletonClone(gltf.scene);
+      normalizeModel(m, cfg.height || 1.6, Object.assign({}, cfg, {scale:(cfg.scale||1)*(0.9+rng()*0.3)}));
+      for(let i=obj.children.length-1;i>=0;i--) obj.remove(obj.children[i]); // drop procedural mesh
+      obj.add(m, shadowDisc(type==='house'?0.85:0.6));
+      styleModel(m);
+    }
+  }catch(err){ console.warn(type+' model load failed, keeping procedural:', err); }
+}
 // character live-swap with idle/walk animation
 let charIsModel=false, charMixer=null; const charAct={};
 async function trySwapCharacter(){
@@ -799,6 +836,7 @@ async function trySwapCharacter(){
     const model=gltf.scene;
     normalizeModel(model, cfg.height||1.1, cfg);
     player.remove(avatar); player.add(model); avatar=model; charIsModel=true;
+    styleModel(model);
     if(gltf.animations && gltf.animations.length){
       charMixer=new THREE.AnimationMixer(model);
       const pick=ns=>gltf.animations.find(a=>ns.some(n=>a.name.toLowerCase().includes(n)));
@@ -806,10 +844,11 @@ async function trySwapCharacter(){
       if(idle){ charAct.idle=charMixer.clipAction(idle); charAct.idle.play(); }
       if(walk){ charAct.walk=charMixer.clipAction(walk); charAct.walk.play(); charAct.walk.weight=0; }
     }
-    // loaded materials pick up the same toon/smooth treatment on next style toggle
   }catch(err){ console.warn('character model load failed, keeping procedural avatar:', err); }
 }
 trySwapCharacter();
+applyModel('tree',  MODELS.tree);
+applyModel('house', MODELS.house);
 
 // player state on sphere
 let pPos = surface(new THREE.Vector3(0,1,0.2)); // start near "north"
@@ -1221,9 +1260,9 @@ setToon(true);   // cartoon look on by default
 
 // ---------- Experimental: face control (raise eyebrows to jump) ----------
 function triggerJump(){ if(grounded){ vAlt=JUMP_V; grounded=false; } }
-let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, browArmed=true;
+let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, blinkArmed=true, blinkStart=0;
 const faceBtn=document.getElementById('faceBtn');
-const BROW_UP=0.55, BROW_DOWN=0.3;      // hysteresis so one raise = one jump
+const BLINK_ON=0.5, BLINK_OFF=0.28, BLINK_HOLD=200;   // eyes shut >=200ms = deliberate (ignores natural blinks)
 faceBtn.addEventListener('click', async ()=>{
   if(faceOn){ stopFace(); return; }
   faceBtn.textContent='😮 載入中…';
@@ -1238,7 +1277,7 @@ faceBtn.addEventListener('click', async ()=>{
     faceVideo = document.createElement('video');
     faceVideo.srcObject=stream; faceVideo.muted=true; faceVideo.playsInline=true; faceVideo.setAttribute('playsinline','');
     await faceVideo.play();
-    faceOn=true; faceBtn.classList.add('on'); faceBtn.textContent='😮 挑眉跳';
+    faceOn=true; faceBtn.classList.add('on'); faceBtn.textContent='😑 閉眼跳';
     faceLoop();
   }catch(err){ console.warn('Face control failed:', err); faceBtn.textContent='😮 不支援'; stopFace(); }
 });
@@ -1256,9 +1295,14 @@ function faceLoop(){
   const cat = res && res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories;
   if(!cat) return;
   const get=n=>{ const c=cat.find(x=>x.categoryName===n); return c?c.score:0; };
-  const brow=Math.max(get('browInnerUp'), (get('browOuterUpLeft')+get('browOuterUpRight'))/2);
-  if(browArmed && brow>BROW_UP){ browArmed=false; if(started) triggerJump(); }
-  else if(!browArmed && brow<BROW_DOWN){ browArmed=true; }   // re-arm when brows relax
+  const blink=(get('eyeBlinkLeft')+get('eyeBlinkRight'))/2;
+  const now=performance.now();
+  if(blink>BLINK_ON){
+    if(blinkStart===0) blinkStart=now;
+    if(blinkArmed && now-blinkStart>=BLINK_HOLD){ blinkArmed=false; if(started) triggerJump(); }
+  } else if(blink<BLINK_OFF){
+    blinkStart=0; blinkArmed=true;                              // re-arm when eyes reopen
+  }
 }
 
 tick();

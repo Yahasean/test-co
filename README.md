@@ -67,6 +67,8 @@ python3 -m http.server 8000
 
 ## 實驗功能:表情控制(挑眉跳躍)
 
-右上「😮 表情控制」會用 [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe) 在瀏覽器內讀臉部 blendshape,**挑眉**(`browInnerUp`)即觸發跳躍。需相機權限與 HTTPS,運算全在裝置端、不上傳。
+右上「😮 表情控制」會用 [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe) 在瀏覽器內讀臉部 blendshape,**閉眼約 0.2 秒**(`eyeBlink`)即觸發跳躍(刻意設門檻避免自然眨眼誤觸)。需相機權限與 HTTPS,運算全在裝置端、不上傳。
+
+`MODELS` 也支援 `tree` / `house`,填上 url 後會把所有已擺放的樹/房子實例整批換成模型(用 `SkeletonUtils` 複製),並自動套用平滑/卡通/AO 風格。
 
 > 本作為玩法/視覺概念的獨立復刻,與 Abeto 原作無關,僅供學習測試之用。
