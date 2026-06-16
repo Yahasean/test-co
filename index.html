@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>Mini Messenger — 迷你星球郵差</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #87c5e8; font-family: -apple-system, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif; }
+  #app { position: fixed; inset: 0; }
+  canvas { display: block; }
+
+  /* HUD */
+  #hud { position: fixed; inset: 0; pointer-events: none; color: #fff; }
+  .panel { position: absolute; pointer-events: none; }
+
+  #tasks {
+    top: 16px; left: 16px;
+    background: rgba(30, 40, 60, .55);
+    backdrop-filter: blur(6px);
+    border-radius: 14px; padding: 12px 16px;
+    font-size: 14px; line-height: 1.5;
+    box-shadow: 0 6px 20px rgba(0,0,0,.2);
+    min-width: 180px;
+  }
+  #tasks h2 { font-size: 13px; letter-spacing: .08em; opacity: .8; margin-bottom: 6px; text-transform: uppercase; }
+  #tasks .count { font-size: 26px; font-weight: 700; }
+  #tasks .hint { font-size: 12px; opacity: .75; margin-top: 6px; }
+
+  #compass {
+    top: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(30,40,60,.45); backdrop-filter: blur(6px);
+    border-radius: 999px; padding: 8px 18px; font-size: 14px; font-weight: 600;
+    display: flex; align-items: center; gap: 8px;
+    opacity: 0; transition: opacity .3s;
+  }
+  #compass .dist { opacity: .8; font-weight: 400; }
+
+  #prompt {
+    bottom: 110px; left: 50%; transform: translateX(-50%);
+    background: rgba(255,255,255,.95); color: #234;
+    border-radius: 12px; padding: 10px 18px; font-weight: 700; font-size: 15px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.25);
+    opacity: 0; transition: opacity .2s, transform .2s; transform: translateX(-50%) translateY(8px);
+  }
+  #prompt.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  #prompt b { color: #e0533d; }
+
+  #toast {
+    bottom: 50%; left: 50%; transform: translate(-50%, 50%) scale(.9);
+    font-size: 30px; font-weight: 800; text-shadow: 0 4px 14px rgba(0,0,0,.35);
+    opacity: 0; transition: opacity .35s, transform .35s; text-align: center;
+  }
+  #toast.show { opacity: 1; transform: translate(-50%, 50%) scale(1); }
+
+  /* Controls help */
+  #help { bottom: 16px; left: 16px; font-size: 12px; opacity: .8; line-height: 1.6;
+    background: rgba(30,40,60,.4); border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(4px); }
+  #help kbd { background: rgba(255,255,255,.85); color:#234; border-radius:4px; padding:1px 6px; font-weight:700; font-size:11px; }
+
+  /* Mobile buttons */
+  #mobile { position: fixed; inset: 0; pointer-events: none; display: none; }
+  .stick { position: absolute; bottom: 30px; pointer-events: auto; }
+  #stickL { left: 30px; }
+  .pad { width: 120px; height: 120px; border-radius: 50%; background: rgba(255,255,255,.12); border: 2px solid rgba(255,255,255,.3); position: relative; }
+  .knob { width: 54px; height: 54px; border-radius: 50%; background: rgba(255,255,255,.55); position: absolute; left: 33px; top: 33px; }
+  #btns { right: 26px; bottom: 36px; pointer-events: auto; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+  .rbtn { width: 70px; height: 70px; border-radius: 50%; background: rgba(255,255,255,.22); border: 2px solid rgba(255,255,255,.4);
+    color: #fff; font-weight: 800; font-size: 13px; display:flex; align-items:center; justify-content:center; }
+  #btnAct { background: rgba(224,83,61,.85); }
+
+  /* Emote bar */
+  #emoteBar { bottom: 16px; left: 50%; transform: translateX(-50%); display: flex; gap: 6px; pointer-events: auto; }
+  .emo { font-size: 22px; background: rgba(30,40,60,.45); border-radius: 10px; width: 40px; height: 40px;
+    display:flex; align-items:center; justify-content:center; cursor: pointer; backdrop-filter: blur(4px);
+    border: none; transition: transform .1s; }
+  .emo:active { transform: scale(.85); }
+
+  /* Start / End overlay */
+  #overlay { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 50% 35%, #aee0ff 0%, #6fb4dd 55%, #3f86b8 100%); color: #fff; text-align: center; z-index: 50; }
+  #overlay h1 { font-size: clamp(34px, 8vw, 64px); font-weight: 900; letter-spacing: .02em; text-shadow: 0 6px 0 rgba(0,0,0,.12); }
+  #overlay p { margin-top: 10px; font-size: 16px; opacity: .92; max-width: 460px; padding: 0 24px; line-height: 1.6; }
+  #overlay .controls { margin-top: 18px; font-size: 13px; opacity: .85; line-height: 1.8; }
+  #overlay .controls kbd { background: rgba(255,255,255,.85); color:#234; border-radius:4px; padding:1px 7px; font-weight:700; }
+  .bigbtn { margin-top: 28px; pointer-events: auto; cursor: pointer; border: none;
+    background: #ffd23f; color: #5a3d00; font-weight: 900; font-size: 20px; letter-spacing: .05em;
+    padding: 16px 48px; border-radius: 999px; box-shadow: 0 8px 0 #d8a800, 0 14px 24px rgba(0,0,0,.25); transition: transform .08s, box-shadow .08s; }
+  .bigbtn:active { transform: translateY(5px); box-shadow: 0 3px 0 #d8a800, 0 6px 14px rgba(0,0,0,.25); }
+  #overlay.hidden { display: none; }
+  .loading { margin-top: 20px; font-size: 13px; opacity: .7; }
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud">
+  <div id="tasks" class="panel">
+    <h2>📮 今日派件</h2>
+    <div><span class="count" id="delivered">0</span> / <span id="total">5</span></div>
+    <div class="hint" id="taskHint">找到發光的信箱送件</div>
+  </div>
+  <div id="compass" class="panel">🧭 <span>下一站</span><span class="dist" id="dist">— m</span></div>
+  <div id="prompt" class="panel">靠近信箱,按 <b>E</b> / 點擊 投遞</div>
+  <div id="toast" class="panel"></div>
+  <div id="help" class="panel">
+    <kbd>W A S D</kbd> / 方向鍵 移動 &nbsp; <kbd>Space</kbd> 跳 &nbsp; <kbd>E</kbd> 投遞<br/>
+    滑鼠拖曳 轉視角 &nbsp; 滾輪 縮放
+  </div>
+</div>
+
+<div id="mobile">
+  <div id="stickL" class="stick"><div class="pad"><div class="knob" id="knobL"></div></div></div>
+  <div id="btns">
+    <div class="rbtn" id="btnJump">跳</div>
+    <div class="rbtn" id="btnAct">送</div>
+  </div>
+</div>
+
+<div id="emoteBar" class="panel" style="position:fixed;">
+  <button class="emo" data-e="👋">👋</button>
+  <button class="emo" data-e="❤️">❤️</button>
+  <button class="emo" data-e="😄">😄</button>
+  <button class="emo" data-e="🎉">🎉</button>
+  <button class="emo" data-e="💌">💌</button>
+</div>
+
+<div id="overlay">
+  <h1>MINI MESSENGER</h1>
+  <p>歡迎來到迷你星球!穿上郵差背包,把 5 封信件送到島上發光的信箱。星球很小,小到看得見地平線的弧度。</p>
+  <div class="controls">
+    <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 · <kbd>Space</kbd> 跳躍 · <kbd>E</kbd> 投遞 · 滑鼠 轉視角<br/>
+    (手機:左下搖桿移動,右下按鈕跳躍 / 投遞)
+  </div>
+  <button class="bigbtn" id="beginBtn">BEGIN</button>
+  <div class="loading" id="loading">載入引擎中…</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+// ---------- Config ----------
+const PLANET_R = 16;          // planet radius (small => visible curvature)
+const GRAVITY = 26;
+const JUMP_V = 9.5;
+const MOVE_SPEED = 5.2;       // metres/sec along surface
+const TURN_SPEED = 2.6;       // rad/sec
+const NUM_TASKS = 5;
+const DELIVER_RANGE = 2.4;
+
+// ---------- Scene ----------
+const app = document.getElementById('app');
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87c5e8);
+scene.fog = new THREE.Fog(0x9fd2ee, 30, 70);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.1, 400);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+app.appendChild(renderer.domElement);
+
+// Lights
+const sun = new THREE.DirectionalLight(0xfff4d6, 2.1);
+sun.position.set(30, 40, 20);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.near = 1; sun.shadow.camera.far = 120;
+sun.shadow.camera.left = -40; sun.shadow.camera.right = 40;
+sun.shadow.camera.top = 40; sun.shadow.camera.bottom = -40;
+scene.add(sun);
+scene.add(new THREE.HemisphereLight(0xbfe3ff, 0x4a7a3a, 0.85));
+scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+
+// Stars / clouds far backdrop (simple)
+const cloudGroup = new THREE.Group();
+for (let i = 0; i < 14; i++) {
+  const c = new THREE.Mesh(
+    new THREE.IcosahedronGeometry(THREE.MathUtils.randFloat(2, 4), 0),
+    new THREE.MeshStandardMaterial({ color: 0xffffff, flatShading: true, roughness: 1 })
+  );
+  const dir = new THREE.Vector3().randomDirection().multiplyScalar(THREE.MathUtils.randFloat(40, 55));
+  c.position.copy(dir);
+  c.scale.y = 0.5;
+  cloudGroup.add(c);
+}
+scene.add(cloudGroup);
+
+// ---------- Planet ----------
+const planetGeo = new THREE.IcosahedronGeometry(PLANET_R, 12);
+// gentle hills via noise
+const pos = planetGeo.attributes.position;
+const v = new THREE.Vector3();
+function hash(n){ return (Math.sin(n)*43758.5453)%1; }
+for (let i=0;i<pos.count;i++){
+  v.fromBufferAttribute(pos,i);
+  const n = v.clone().normalize();
+  const bump = Math.sin(n.x*3.1)*Math.cos(n.y*2.7)*Math.sin(n.z*3.4);
+  const r = PLANET_R + bump*0.55;
+  v.copy(n).multiplyScalar(r);
+  pos.setXYZ(i, v.x, v.y, v.z);
+}
+planetGeo.computeVertexNormals();
+const planet = new THREE.Mesh(planetGeo, new THREE.MeshStandardMaterial({
+  color: 0x69b04a, flatShading: true, roughness: 0.95
+}));
+planet.receiveShadow = true;
+scene.add(planet);
+
+// helper: surface point + up for a given direction
+function surface(dir){ return dir.clone().normalize().multiplyScalar(PLANET_R); }
+
+// Orient object so its +Y points along `up`, facing `fwd`
+const _m = new THREE.Matrix4(), _q = new THREE.Quaternion();
+function orient(obj, up, fwd){
+  const u = up.clone().normalize();
+  let f = fwd.clone().sub(u.clone().multiplyScalar(fwd.dot(u))).normalize();
+  if (f.lengthSq() < 1e-6) f.set(1,0,0);
+  const right = new THREE.Vector3().crossVectors(u, f).normalize();
+  const f2 = new THREE.Vector3().crossVectors(right, u).normalize();
+  _m.makeBasis(right, u, f2.multiplyScalar(-1)); // model faces -Z
+  obj.quaternion.setFromRotationMatrix(_m);
+}
+
+// ---------- Decorations: trees, rocks, houses ----------
+function placeOnPlanet(obj, dir){
+  const up = dir.clone().normalize();
+  obj.position.copy(up.clone().multiplyScalar(PLANET_R - 0.05));
+  orient(obj, up, new THREE.Vector3(0,0,1));
+}
+function makeTree(){
+  const g = new THREE.Group();
+  const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.12,0.18,0.7,6),
+    new THREE.MeshStandardMaterial({color:0x8a5a2b, flatShading:true, roughness:1}));
+  trunk.position.y = 0.35; trunk.castShadow=true;
+  const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(0.6,0),
+    new THREE.MeshStandardMaterial({color:0x3f8f3a, flatShading:true, roughness:1}));
+  leaf.position.y = 1.0; leaf.castShadow=true; leaf.scale.set(1,1.2,1);
+  g.add(trunk, leaf);
+  return g;
+}
+function makeRock(){
+  const r = new THREE.Mesh(new THREE.DodecahedronGeometry(THREE.MathUtils.randFloat(0.25,0.5),0),
+    new THREE.MeshStandardMaterial({color:0x9aa0a6, flatShading:true, roughness:1}));
+  r.castShadow=true; r.position.y=0.2; return r;
+}
+function makeHouse(color){
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.1,0.9,1.1),
+    new THREE.MeshStandardMaterial({color, flatShading:true, roughness:1}));
+  body.position.y=0.45; body.castShadow=true; body.receiveShadow=true;
+  const roof = new THREE.Mesh(new THREE.ConeGeometry(0.95,0.6,4),
+    new THREE.MeshStandardMaterial({color:0xb6452f, flatShading:true, roughness:1}));
+  roof.position.y=1.2; roof.rotation.y=Math.PI/4; roof.castShadow=true;
+  g.add(body, roof);
+  return g;
+}
+
+const rng = (()=>{ let s=1337; return ()=> (s=(s*16807)%2147483647)/2147483647; })();
+function randDir(){ return new THREE.Vector3(rng()*2-1, rng()*2-1, rng()*2-1).normalize(); }
+
+for(let i=0;i<60;i++){ const t=makeTree(); placeOnPlanet(t, randDir()); scene.add(t); }
+for(let i=0;i<30;i++){ const r=makeRock(); placeOnPlanet(r, randDir()); scene.add(r); }
+for(let i=0;i<6;i++){ const h=makeHouse([0xe8c07a,0xd98c6a,0x8fb3d9,0xc6d98c,0xd9a8c6,0xa8c6d9][i]); placeOnPlanet(h, randDir()); scene.add(h); }
+
+// ---------- Mailboxes (delivery targets) ----------
+const mailboxes = [];
+function makeMailbox(){
+  const g = new THREE.Group();
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,0.7,6),
+    new THREE.MeshStandardMaterial({color:0x6b4a2b, roughness:1}));
+  post.position.y=0.35; post.castShadow=true;
+  const box = new THREE.Mesh(new THREE.BoxGeometry(0.45,0.35,0.6),
+    new THREE.MeshStandardMaterial({color:0xe0533d, flatShading:true, roughness:.8}));
+  box.position.y=0.75; box.castShadow=true;
+  const flag = new THREE.Mesh(new THREE.BoxGeometry(0.04,0.22,0.16),
+    new THREE.MeshStandardMaterial({color:0xffd23f}));
+  flag.position.set(0.26,0.82,0); flag.castShadow=true;
+  // glowing ring marker
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.9,0.07,8,28),
+    new THREE.MeshBasicMaterial({color:0xffe14d}));
+  ring.rotation.x=Math.PI/2; ring.position.y=0.06;
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,5,12,1,true),
+    new THREE.MeshBasicMaterial({color:0xffe14d, transparent:true, opacity:0.12, side:THREE.DoubleSide}));
+  beam.position.y=2.5;
+  g.add(post, box, flag, ring, beam);
+  g.userData = { ring, beam, flag, done:false };
+  return g;
+}
+// spread targets around planet using golden-spiral for even coverage
+for(let i=0;i<NUM_TASKS;i++){
+  const y = 1 - (i+0.5)/NUM_TASKS*2;
+  const r = Math.sqrt(1-y*y);
+  const phi = i*2.399963;
+  const dir = new THREE.Vector3(Math.cos(phi)*r, y, Math.sin(phi)*r);
+  const mb = makeMailbox();
+  placeOnPlanet(mb, dir);
+  mb.userData.dir = dir.clone();
+  mailboxes.push(mb); scene.add(mb);
+}
+
+// ---------- Player ----------
+const player = new THREE.Group();
+function makePlayer(){
+  const g = new THREE.Group();
+  const skin=0xf1c8a0, shirt=0x3d7bd9, pants=0x39434f, hair=0x4a342a, bag=0xc98a3c;
+  const body=new THREE.Mesh(new THREE.CapsuleGeometry(0.22,0.34,4,8),
+    new THREE.MeshStandardMaterial({color:shirt, flatShading:true, roughness:1}));
+  body.position.y=0.55; body.castShadow=true;
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.24,16,16),
+    new THREE.MeshStandardMaterial({color:skin, roughness:1}));
+  head.position.y=1.0; head.castShadow=true;
+  const hairM=new THREE.Mesh(new THREE.SphereGeometry(0.255,16,16,0,Math.PI*2,0,Math.PI*0.62),
+    new THREE.MeshStandardMaterial({color:hair, roughness:1}));
+  hairM.position.y=1.03;
+  const cap=new THREE.Mesh(new THREE.CylinderGeometry(0.26,0.26,0.12,12),
+    new THREE.MeshStandardMaterial({color:0xe0533d, roughness:1}));
+  cap.position.y=1.18;
+  const peak=new THREE.Mesh(new THREE.BoxGeometry(0.3,0.04,0.18),
+    new THREE.MeshStandardMaterial({color:0xc23d2a}));
+  peak.position.set(0,1.16,0.22);
+  // legs
+  const legGeo=new THREE.CapsuleGeometry(0.09,0.22,3,6);
+  const legMat=new THREE.MeshStandardMaterial({color:pants, roughness:1});
+  const legL=new THREE.Mesh(legGeo,legMat); legL.position.set(-0.11,0.22,0); legL.castShadow=true;
+  const legR=new THREE.Mesh(legGeo,legMat); legR.position.set(0.11,0.22,0); legR.castShadow=true;
+  // arms
+  const armGeo=new THREE.CapsuleGeometry(0.08,0.22,3,6);
+  const armMat=new THREE.MeshStandardMaterial({color:shirt, roughness:1});
+  const armL=new THREE.Mesh(armGeo,armMat); armL.position.set(-0.3,0.6,0); armL.castShadow=true;
+  const armR=new THREE.Mesh(armGeo,armMat); armR.position.set(0.3,0.6,0); armR.castShadow=true;
+  // satchel
+  const satchel=new THREE.Mesh(new THREE.BoxGeometry(0.34,0.3,0.16),
+    new THREE.MeshStandardMaterial({color:bag, flatShading:true, roughness:1}));
+  satchel.position.set(0.18,0.5,-0.2); satchel.castShadow=true;
+  g.add(body,head,hairM,cap,peak,legL,legR,armL,armR,satchel);
+  g.userData={legL,legR,armL,armR};
+  return g;
+}
+const avatar = makePlayer();
+player.add(avatar);
+scene.add(player);
+
+// player state on sphere
+let pPos = surface(new THREE.Vector3(0,1,0.2)); // start near "north"
+let pFwd = new THREE.Vector3(0,0,1);             // tangent forward
+let pUp  = pPos.clone().normalize();
+// keep forward tangent
+function reTangent(){
+  pUp = pPos.clone().normalize();
+  pFwd.sub(pUp.clone().multiplyScalar(pFwd.dot(pUp))).normalize();
+}
+reTangent();
+let altitude = 0;   // height above surface (jump)
+let vAlt = 0;
+let grounded = true;
+let walkPhase = 0;
+
+// ---------- Input ----------
+const keys = {};
+addEventListener('keydown', e=>{
+  keys[e.code]=true;
+  if(e.code==='KeyE') tryDeliver();
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+});
+addEventListener('keyup', e=>{ keys[e.code]=false; });
+
+// camera orbit
+let camYaw = 0, camPitch = 0.5, camDist = 7;
+let dragging=false, lastX=0, lastY=0;
+renderer.domElement.addEventListener('pointerdown', e=>{ dragging=true; lastX=e.clientX; lastY=e.clientY; });
+addEventListener('pointerup', ()=> dragging=false);
+addEventListener('pointermove', e=>{
+  if(!dragging) return;
+  camYaw -= (e.clientX-lastX)*0.005;
+  camPitch = THREE.MathUtils.clamp(camPitch+(e.clientY-lastY)*0.005, -0.2, 1.2);
+  lastX=e.clientX; lastY=e.clientY;
+});
+addEventListener('wheel', e=>{ camDist = THREE.MathUtils.clamp(camDist+e.deltaY*0.01, 4, 14); }, {passive:true});
+// click to deliver
+renderer.domElement.addEventListener('click', ()=>{ if(!dragMoved) tryDeliver(); });
+let dragMoved=false, downX=0;
+renderer.domElement.addEventListener('pointerdown', e=>{ downX=e.clientX; dragMoved=false; });
+addEventListener('pointermove', e=>{ if(dragging && Math.abs(e.clientX-downX)>6) dragMoved=true; });
+
+// Mobile joystick
+const isTouch = matchMedia('(pointer: coarse)').matches;
+let move = {x:0, y:0};
+if(isTouch){
+  document.getElementById('mobile').style.display='block';
+  const pad=document.querySelector('#stickL .pad'), knob=document.getElementById('knobL');
+  let pid=null, cx=0, cy=0;
+  pad.addEventListener('pointerdown', e=>{ pid=e.pointerId; const r=pad.getBoundingClientRect(); cx=r.left+r.width/2; cy=r.top+r.height/2; pad.setPointerCapture(pid); });
+  pad.addEventListener('pointermove', e=>{
+    if(e.pointerId!==pid) return;
+    let dx=e.clientX-cx, dy=e.clientY-cy; const m=Math.hypot(dx,dy), max=44;
+    if(m>max){ dx=dx/m*max; dy=dy/m*max; }
+    knob.style.left=(33+dx)+'px'; knob.style.top=(33+dy)+'px';
+    move.x = dx/max; move.y = dy/max;
+  });
+  const reset=()=>{ pid=null; knob.style.left='33px'; knob.style.top='33px'; move.x=0; move.y=0; };
+  pad.addEventListener('pointerup', reset); pad.addEventListener('pointercancel', reset);
+  document.getElementById('btnJump').addEventListener('pointerdown', ()=> keys['Space']=true);
+  document.getElementById('btnJump').addEventListener('pointerup', ()=> keys['Space']=false);
+  document.getElementById('btnAct').addEventListener('pointerdown', tryDeliver);
+}
+
+// Emotes
+const emoteSprites = [];
+document.querySelectorAll('.emo').forEach(b=>{
+  b.addEventListener('click', ()=> spawnEmote(b.dataset.e));
+});
+function spawnEmote(ch){
+  const cv=document.createElement('canvas'); cv.width=cv.height=128;
+  const cx=cv.getContext('2d'); cx.font='90px serif'; cx.textAlign='center'; cx.textBaseline='middle';
+  cx.fillText(ch,64,72);
+  const tex=new THREE.CanvasTexture(cv);
+  const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:tex, transparent:true}));
+  sp.scale.set(0.9,0.9,0.9);
+  sp.userData={life:0, off:new THREE.Vector3((rng()-0.5)*1.2,1.6,(rng()-0.5)*1.2)};
+  scene.add(sp); emoteSprites.push(sp);
+}
+
+// ---------- Delivery logic ----------
+let delivered = 0;
+const elDelivered=document.getElementById('delivered');
+const elTotal=document.getElementById('total'); elTotal.textContent=NUM_TASKS;
+const elDist=document.getElementById('dist');
+const elCompass=document.getElementById('compass');
+const elPrompt=document.getElementById('prompt');
+const elToast=document.getElementById('toast');
+const elTaskHint=document.getElementById('taskHint');
+
+function nearestTarget(){
+  let best=null, bestD=Infinity;
+  for(const mb of mailboxes){
+    if(mb.userData.done) continue;
+    const d=mb.position.distanceTo(player.position);
+    if(d<bestD){ bestD=d; best=mb; }
+  }
+  return {mb:best, d:bestD};
+}
+function tryDeliver(){
+  if(!started || delivered>=NUM_TASKS) return;
+  const {mb,d}=nearestTarget();
+  if(mb && d<=DELIVER_RANGE){
+    mb.userData.done=true;
+    mb.userData.ring.visible=false;
+    mb.userData.beam.visible=false;
+    delivered++;
+    elDelivered.textContent=delivered;
+    spawnEmote('💌');
+    showToast(delivered>=NUM_TASKS ? '🎉 全部送達!' : '📬 +1 已投遞');
+    if(delivered>=NUM_TASKS){
+      elTaskHint.textContent='任務完成,謝謝你的辛勞!';
+      setTimeout(endGame, 1400);
+    }
+  }
+}
+let toastTimer=null;
+function showToast(t){
+  elToast.textContent=t; elToast.classList.add('show');
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>elToast.classList.remove('show'),1300);
+}
+
+// ---------- Start / End ----------
+let started=false;
+const overlay=document.getElementById('overlay');
+document.getElementById('loading').style.display='none';
+document.getElementById('beginBtn').addEventListener('click', ()=>{
+  overlay.classList.add('hidden'); started=true;
+});
+function endGame(){
+  overlay.querySelector('h1').textContent='✅ 派件完成';
+  overlay.querySelector('p').textContent='你在迷你星球上送完了所有信件!按下重新開始再玩一次。';
+  document.getElementById('beginBtn').textContent='RESTART';
+  overlay.classList.remove('hidden');
+  // reset
+  mailboxes.forEach(mb=>{ mb.userData.done=false; mb.userData.ring.visible=true; mb.userData.beam.visible=true; });
+  delivered=0; elDelivered.textContent='0'; elTaskHint.textContent='找到發光的信箱送件';
+  started=false;
+}
+
+// ---------- Resize ----------
+addEventListener('resize', ()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---------- Loop ----------
+const clock=new THREE.Clock();
+const _camPos=new THREE.Vector3(), _camTarget=new THREE.Vector3();
+function tick(){
+  const dt=Math.min(clock.getDelta(), 0.05);
+  if(started) update(dt);
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+function update(dt){
+  // --- input -> turn & move ---
+  let turn=0, fwdInput=0;
+  if(keys['KeyA']||keys['ArrowLeft']) turn+=1;
+  if(keys['KeyD']||keys['ArrowRight']) turn-=1;
+  if(keys['KeyW']||keys['ArrowUp']) fwdInput+=1;
+  if(keys['KeyS']||keys['ArrowDown']) fwdInput-=1;
+  if(isTouch){ turn += -move.x; fwdInput += -move.y; }
+
+  // turn forward around up
+  if(turn!==0){
+    pFwd.applyAxisAngle(pUp, turn*TURN_SPEED*dt);
+    reTangent();
+  }
+  // move along surface (rotate position about axis up×fwd)
+  let moving=false;
+  if(fwdInput!==0){
+    moving=true;
+    const dist=fwdInput*MOVE_SPEED*dt;
+    const ang=dist/PLANET_R;
+    const axis=new THREE.Vector3().crossVectors(pUp, pFwd).normalize();
+    const q=new THREE.Quaternion().setFromAxisAngle(axis, ang);
+    pPos.applyQuaternion(q);
+    pFwd.applyQuaternion(q);
+    pPos.copy(surface(pPos)); // clamp to radius
+    reTangent();
+  }
+
+  // jump / gravity
+  if(keys['Space'] && grounded){ vAlt=JUMP_V; grounded=false; }
+  if(!grounded){
+    vAlt-=GRAVITY*dt; altitude+=vAlt*dt;
+    if(altitude<=0){ altitude=0; vAlt=0; grounded=true; }
+  }
+
+  // place avatar
+  player.position.copy(pUp.clone().multiplyScalar(PLANET_R+altitude));
+  orient(player, pUp, pFwd);
+
+  // walk animation
+  if(moving && grounded){
+    walkPhase+=dt*10;
+    const s=Math.sin(walkPhase)*0.4;
+    avatar.userData.legL.rotation.x=s; avatar.userData.legR.rotation.x=-s;
+    avatar.userData.armL.rotation.x=-s; avatar.userData.armR.rotation.x=s;
+  } else {
+    avatar.userData.legL.rotation.x*=0.8; avatar.userData.legR.rotation.x*=0.8;
+    avatar.userData.armL.rotation.x*=0.8; avatar.userData.armR.rotation.x*=0.8;
+  }
+
+  // animate mailbox rings
+  const t=performance.now()*0.001;
+  for(const mb of mailboxes){
+    if(mb.userData.done) continue;
+    mb.userData.ring.rotation.z=t*1.5;
+    mb.userData.ring.scale.setScalar(1+Math.sin(t*3)*0.06);
+    mb.userData.flag.rotation.z=Math.sin(t*4)*0.15;
+  }
+  cloudGroup.rotation.y+=dt*0.01;
+
+  // emotes float
+  for(let i=emoteSprites.length-1;i>=0;i--){
+    const sp=emoteSprites[i]; sp.userData.life+=dt;
+    const base=player.position.clone().add(pUp.clone().multiplyScalar(sp.userData.off.y+sp.userData.life*1.2));
+    sp.position.copy(base);
+    sp.material.opacity=Math.max(0,1-sp.userData.life/1.6);
+    if(sp.userData.life>1.6){ scene.remove(sp); emoteSprites.splice(i,1); }
+  }
+
+  // --- camera (orbit behind player, on planet up) ---
+  const up=pUp;
+  // build basis: forward in tangent, rotated by camYaw around up
+  const f=pFwd.clone().applyAxisAngle(up, camYaw).normalize();
+  const back=f.clone().multiplyScalar(-1);
+  const offsetDir=back.clone().multiplyScalar(Math.cos(camPitch)).add(up.clone().multiplyScalar(Math.sin(camPitch))).normalize();
+  _camPos.copy(player.position).add(offsetDir.multiplyScalar(camDist)).add(up.clone().multiplyScalar(0.6));
+  camera.position.lerp(_camPos, 0.15);
+  _camTarget.copy(player.position).add(up.clone().multiplyScalar(0.8));
+  camera.up.copy(up);
+  camera.lookAt(_camTarget);
+
+  // --- HUD compass / prompt ---
+  const {mb,d}=nearestTarget();
+  if(mb){
+    elCompass.style.opacity='1';
+    elDist.textContent=d.toFixed(1)+' m';
+    if(d<=DELIVER_RANGE){ elPrompt.classList.add('show'); }
+    else elPrompt.classList.remove('show');
+  } else {
+    elCompass.style.opacity='0'; elPrompt.classList.remove('show');
+  }
+}
+tick();
+</script>
+</body>
+</html>
