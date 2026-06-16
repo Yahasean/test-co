@@ -58,6 +58,12 @@
     background: rgba(30,40,60,.4); border-radius: 10px; padding: 8px 12px; backdrop-filter: blur(4px); }
   #help kbd { background: rgba(255,255,255,.85); color:#234; border-radius:4px; padding:1px 6px; font-weight:700; font-size:11px; }
 
+  #gyroBtn { position: fixed; top: 16px; right: 16px; z-index: 30; display: none; pointer-events: auto;
+    background: rgba(30,40,60,.55); color: #fff; border: 1px solid rgba(255,255,255,.3);
+    border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600;
+    backdrop-filter: blur(6px); cursor: pointer; }
+  #gyroBtn.on { background: rgba(224,83,61,.9); border-color: rgba(255,255,255,.5); }
+
   /* Mobile buttons */
   #mobile { position: fixed; inset: 0; pointer-events: none; display: none; }
   .stick { position: absolute; bottom: 30px; pointer-events: auto; }
@@ -109,6 +115,8 @@
   </div>
 </div>
 
+<button id="gyroBtn">📱 體感視角</button>
+
 <div id="mobile">
   <div id="stickL" class="stick"><div class="pad"><div class="knob" id="knobL"></div></div></div>
   <div id="btns">
@@ -130,7 +138,7 @@
   <p>歡迎來到迷你星球!穿上郵差背包,把 5 封信件送到島上發光的信箱。星球很小,小到看得見地平線的弧度。</p>
   <div class="controls">
     <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 · <kbd>Space</kbd> 跳躍 · <kbd>E</kbd> 投遞 · 滑鼠 轉視角<br/>
-    (手機:左下搖桿移動,右下按鈕跳躍 / 投遞)
+    (手機:左下搖桿移動,右下按鈕跳躍 / 投遞,右上「📱 體感視角」可用傾斜手機轉鏡頭)
   </div>
   <button class="bigbtn" id="beginBtn">BEGIN</button>
   <div class="loading" id="loading">載入引擎中…</div>
@@ -228,11 +236,12 @@ const planetGeo = new THREE.IcosahedronGeometry(PLANET_R, 12);
 const pos = planetGeo.attributes.position;
 const v = new THREE.Vector3();
 function hash(n){ return (Math.sin(n)*43758.5453)%1; }
+const BUMP_AMP = 0.3;                                 // gentler hills so things don't sink/tilt
+function bumpAt(n){ return Math.sin(n.x*3.1)*Math.cos(n.y*2.7)*Math.sin(n.z*3.4); }
 for (let i=0;i<pos.count;i++){
   v.fromBufferAttribute(pos,i);
   const n = v.clone().normalize();
-  const bump = Math.sin(n.x*3.1)*Math.cos(n.y*2.7)*Math.sin(n.z*3.4);
-  const r = PLANET_R + bump*0.55;
+  const r = PLANET_R + bumpAt(n)*BUMP_AMP;
   v.copy(n).multiplyScalar(r);
   pos.setXYZ(i, v.x, v.y, v.z);
 }
@@ -248,12 +257,12 @@ const _c = new THREE.Color();
 for (let i=0;i<pos.count;i++){
   v.fromBufferAttribute(pos,i);
   const n = v.clone().normalize();
-  const h = v.length() - PLANET_R;                  // -0.55..0.55
+  const h = v.length() - PLANET_R;                  // -BUMP_AMP..BUMP_AMP
   const sand = Math.sin(n.x*5.2+1.3)*Math.cos(n.z*4.7); // patchy sandy zones
-  if (h > 0.32) _c.copy(cRock);
+  if (h > 0.20) _c.copy(cRock);
   else if (sand > 0.78) _c.copy(cSand);
-  else if (h > 0.12) _c.copy(cHill);
-  else if (h < -0.18) _c.copy(cValley);
+  else if (h > 0.07) _c.copy(cHill);
+  else if (h < -0.12) _c.copy(cValley);
   else _c.copy(cGrass);
   _c.offsetHSL(0, 0, (hash(i*1.7)-0.5)*0.04);        // subtle tonal noise
   colArr.push(_c.r, _c.g, _c.b);
@@ -267,6 +276,8 @@ scene.add(planet);
 
 // helper: surface point + up for a given direction
 function surface(dir){ return dir.clone().normalize().multiplyScalar(PLANET_R); }
+// actual terrain radius (follows the hills) for a given direction
+function terrainRadius(dir){ return PLANET_R + bumpAt(dir.clone().normalize())*BUMP_AMP; }
 
 // Orient object so its +Y points along `up`, facing `fwd`
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion();
@@ -283,7 +294,7 @@ function orient(obj, up, fwd){
 // ---------- Decorations: trees, rocks, houses ----------
 function placeOnPlanet(obj, dir){
   const up = dir.clone().normalize();
-  obj.position.copy(up.clone().multiplyScalar(PLANET_R - 0.05));
+  obj.position.copy(up.clone().multiplyScalar(terrainRadius(up) - 0.04)); // sit on the hills
   orient(obj, up, new THREE.Vector3(0,0,1));
 }
 const LEAF_COLORS = [0x3f8f3a, 0x4fa046, 0x5cae4e, 0x47953f, 0x6cae3c];
@@ -455,6 +466,41 @@ for(let i=0;i<NUM_TASKS;i++){
   for(let k=0;k<4;k++){ const gr=makeGrass(); placeOnPlanet(gr, jitterDir(dir,0.15)); scene.add(gr); }
 }
 
+// ---------- Roads: dirt paths looping through every village ----------
+function slerpDir(a,b,t){
+  const d=THREE.MathUtils.clamp(a.dot(b),-1,1), om=Math.acos(d);
+  if(om<1e-4) return a.clone();
+  const so=Math.sin(om);
+  return a.clone().multiplyScalar(Math.sin((1-t)*om)/so)
+          .add(b.clone().multiplyScalar(Math.sin(t*om)/so)).normalize();
+}
+const roadMat=new THREE.MeshStandardMaterial({color:0xcaa46a, roughness:1, side:THREE.DoubleSide});
+roadMat.polygonOffset=true; roadMat.polygonOffsetFactor=-2; roadMat.polygonOffsetUnits=-2;
+function makeRoad(a,b,width=0.55){
+  const segs=56, vp=[], idx=[];
+  for(let i=0;i<=segs;i++){
+    const t=i/segs;
+    const dir=slerpDir(a,b,t);
+    const c=dir.clone().multiplyScalar(terrainRadius(dir)+0.03);
+    const dir2=slerpDir(a,b,Math.min(1,t+1/segs));
+    let fwd=dir2.clone().sub(dir);
+    if(fwd.lengthSq()<1e-9) fwd=new THREE.Vector3().crossVectors(dir,new THREE.Vector3(0,1,0));
+    fwd.normalize();
+    const side=new THREE.Vector3().crossVectors(dir,fwd).normalize().multiplyScalar(width/2);
+    const l=c.clone().sub(side), r=c.clone().add(side);
+    vp.push(l.x,l.y,l.z, r.x,r.y,r.z);
+  }
+  for(let i=0;i<segs;i++){ const a0=i*2,b0=i*2+1,a1=i*2+2,b1=i*2+3; idx.push(a0,b0,a1, b0,b1,a1); }
+  const geo=new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(vp,3));
+  geo.setIndex(idx); geo.computeVertexNormals();
+  const m=new THREE.Mesh(geo, roadMat); m.receiveShadow=true; return m;
+}
+const villageDirs = mailboxes.map(mb=>mb.userData.dir.clone());
+for(let i=0;i<villageDirs.length;i++){
+  scene.add(makeRoad(villageDirs[i], villageDirs[(i+1)%villageDirs.length]));
+}
+
 // ---------- Player ----------
 const player = new THREE.Group();
 function makePlayer(){
@@ -584,6 +630,30 @@ if(isTouch){
   document.getElementById('btnAct').addEventListener('pointerdown', tryDeliver);
 }
 
+// Gyroscope look control (mobile; iOS needs a permission tap)
+let gyroOn=false, gyroBase=null, gyroYaw=0, gyroPitch=null;
+const gyroBtn=document.getElementById('gyroBtn');
+if(isTouch && window.DeviceOrientationEvent){
+  gyroBtn.style.display='block';
+  gyroBtn.addEventListener('click', ()=>{
+    if(gyroOn){ stopGyro(); return; }
+    if(typeof DeviceOrientationEvent.requestPermission==='function'){
+      DeviceOrientationEvent.requestPermission()
+        .then(s=>{ if(s==='granted') startGyro(); else gyroBtn.textContent='📱 體感被拒'; })
+        .catch(()=>{ gyroBtn.textContent='📱 不支援'; });
+    } else startGyro();
+  });
+}
+function startGyro(){ gyroBase=null; gyroOn=true; gyroBtn.classList.add('on'); gyroBtn.textContent='📱 體感:開'; addEventListener('deviceorientation', onOrient); }
+function stopGyro(){ gyroOn=false; gyroBtn.classList.remove('on'); gyroBtn.textContent='📱 體感視角'; removeEventListener('deviceorientation', onOrient); }
+function onOrient(e){
+  if(e.beta==null||e.gamma==null) return;
+  if(!gyroBase){ gyroBase={beta:e.beta, gamma:e.gamma}; return; } // capture neutral pose
+  const dG=e.gamma-gyroBase.gamma, dB=e.beta-gyroBase.beta;       // tilt relative to neutral
+  gyroYaw   = THREE.MathUtils.degToRad(-dG)*1.6;
+  gyroPitch = THREE.MathUtils.clamp(0.5 + THREE.MathUtils.degToRad(dB)*1.2, -0.15, 1.15);
+}
+
 // Emotes
 const emoteSprites = [];
 document.querySelectorAll('.emo').forEach(b=>{
@@ -710,8 +780,8 @@ function update(dt){
     if(altitude<=0){ altitude=0; vAlt=0; grounded=true; }
   }
 
-  // place avatar
-  player.position.copy(pUp.clone().multiplyScalar(PLANET_R+altitude));
+  // place avatar on the terrain surface (so it never sinks into hills)
+  player.position.copy(pUp.clone().multiplyScalar(terrainRadius(pUp)+altitude));
   orient(player, pUp, pFwd);
 
   // walk animation
@@ -749,10 +819,12 @@ function update(dt){
 
   // --- camera (orbit behind player, on planet up) ---
   const up=pUp;
-  // build basis: forward in tangent, rotated by camYaw around up
-  const f=pFwd.clone().applyAxisAngle(up, camYaw).normalize();
+  const yaw   = gyroOn ? gyroYaw : camYaw;
+  const pitch = (gyroOn && gyroPitch!=null) ? gyroPitch : camPitch;
+  // build basis: forward in tangent, rotated by yaw around up
+  const f=pFwd.clone().applyAxisAngle(up, yaw).normalize();
   const back=f.clone().multiplyScalar(-1);
-  const offsetDir=back.clone().multiplyScalar(Math.cos(camPitch)).add(up.clone().multiplyScalar(Math.sin(camPitch))).normalize();
+  const offsetDir=back.clone().multiplyScalar(Math.cos(pitch)).add(up.clone().multiplyScalar(Math.sin(pitch))).normalize();
   _camPos.copy(player.position).add(offsetDir.multiplyScalar(camDist)).add(up.clone().multiplyScalar(0.6));
   camera.position.lerp(_camPos, 0.15);
   _camTarget.copy(player.position).add(up.clone().multiplyScalar(0.8));
