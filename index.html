@@ -1364,9 +1364,9 @@ setToon(true);   // cartoon look on by default
 
 // ---------- Experimental: face control (raise eyebrows to jump) ----------
 function triggerJump(){ if(grounded){ vAlt=JUMP_V; grounded=false; } }
-let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, wideArmed=true, wideStart=0;
+let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, mouthArmed=true, mouthStart=0;
 const faceBtn=document.getElementById('faceBtn');
-const WIDE_ON=0.28, WIDE_OFF=0.15, WIDE_HOLD=100;  // eyes-wide OR brows-up >=100ms = jump
+const MOUTH_ON=0.4, MOUTH_OFF=0.2, MOUTH_HOLD=80;   // mouth open (jawOpen) >=80ms = jump
 faceBtn.addEventListener('click', async ()=>{
   if(faceOn){ stopFace(); return; }
   faceBtn.textContent='😮 載入中…';
@@ -1381,7 +1381,7 @@ faceBtn.addEventListener('click', async ()=>{
     faceVideo = document.createElement('video');
     faceVideo.srcObject=stream; faceVideo.muted=true; faceVideo.playsInline=true; faceVideo.setAttribute('playsinline','');
     await faceVideo.play();
-    faceOn=true; faceBtn.classList.add('on'); faceBtn.textContent='👀 睜眼跳';
+    faceOn=true; faceBtn.classList.add('on'); faceBtn.textContent='😮 張嘴跳';
     faceLoop();
   }catch(err){ console.warn('Face control failed:', err); faceBtn.textContent='😮 不支援'; stopFace(); }
 });
@@ -1399,15 +1399,13 @@ function faceLoop(){
   const cat = res && res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories;
   if(!cat) return;
   const get=n=>{ const c=cat.find(x=>x.categoryName===n); return c?c.score:0; };
-  const eyeWide=(get('eyeWideLeft')+get('eyeWideRight'))/2;
-  const brow=Math.max(get('browInnerUp'), (get('browOuterUpLeft')+get('browOuterUpRight'))/2);
-  const wide=Math.max(eyeWide, brow);          // either widening eyes or raising brows counts
+  const mouth=get('jawOpen');                  // mouth-open strength
   const now=performance.now();
-  if(wide>WIDE_ON){
-    if(wideStart===0) wideStart=now;
-    if(wideArmed && now-wideStart>=WIDE_HOLD){ wideArmed=false; if(started) triggerJump(); }
-  } else if(wide<WIDE_OFF){
-    wideStart=0; wideArmed=true;                                // re-arm when eyes relax
+  if(mouth>MOUTH_ON){
+    if(mouthStart===0) mouthStart=now;
+    if(mouthArmed && now-mouthStart>=MOUTH_HOLD){ mouthArmed=false; if(started) triggerJump(); }
+  } else if(mouth<MOUTH_OFF){
+    mouthStart=0; mouthArmed=true;                              // re-arm when mouth closes
   }
 }
 
