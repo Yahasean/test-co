@@ -189,6 +189,7 @@ import { SSAOPass } from 'three/addons/postprocessing/SSAOPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { clone as skeletonClone } from 'three/addons/utils/SkeletonUtils.js';
 
@@ -382,6 +383,22 @@ const planet = new THREE.Mesh(planetGeo, new THREE.MeshStandardMaterial({
 injectTerrain(planet.material);
 planet.receiveShadow = true;
 scene.add(planet);
+
+// ---------- Water: a sea-level sphere that pools into the low valleys ----------
+const waterTime = { value: 0 };
+const waterMat = new THREE.MeshStandardMaterial({
+  color:0x4fb4d6, transparent:true, opacity:0.82, roughness:0.12, metalness:0.0
+});
+waterMat.onBeforeCompile = (sh)=>{
+  sh.uniforms.uTime = waterTime;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nuniform float uTime;')
+    .replace('#include <begin_vertex>',
+      '#include <begin_vertex>\n float wv = sin(position.x*7.0+uTime*1.4)*cos(position.z*7.0+uTime*1.1)*0.025; transformed += normalize(position)*wv;');
+};
+const water = new THREE.Mesh(new THREE.IcosahedronGeometry(PLANET_R-0.2, 24), waterMat);
+water.userData.noToon = true;     // keep its translucent look, don't cel-shade
+scene.add(water);
 
 // helper: surface point + up for a given direction
 function surface(dir){ return dir.clone().normalize().multiplyScalar(PLANET_R); }
@@ -713,6 +730,36 @@ placeStructure(makeStairs(5), jitterDir(villageDirs[3], 0.09));
   colAttr.needsUpdate=true;
 })();
 
+// ---------- Ambient life: wind sway, pollen, butterflies ----------
+const treeSway = swappables.tree.map(o=>({ o, q:o.quaternion.clone(), ph:rng()*6.28, ax:new THREE.Vector3(1,0,0) }));
+// drifting pollen / fireflies near the surface
+const POLLEN=160, pArr=new Float32Array(POLLEN*3);
+for(let i=0;i<POLLEN;i++){ const d=randDir().multiplyScalar(PLANET_R+0.3+rng()*2.4); pArr[i*3]=d.x; pArr[i*3+1]=d.y; pArr[i*3+2]=d.z; }
+const pollenGeo=new THREE.BufferGeometry();
+pollenGeo.setAttribute('position', new THREE.Float32BufferAttribute(pArr,3));
+const pollenTex=makeTex(64,(x,s)=>{ const g=x.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+  g.addColorStop(0,'rgba(255,250,205,1)'); g.addColorStop(1,'rgba(255,250,205,0)'); x.fillStyle=g; x.fillRect(0,0,s,s); },[1,1]);
+const pollen=new THREE.Points(pollenGeo, new THREE.PointsMaterial({ size:0.17, map:pollenTex,
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, opacity:0.7 }));
+scene.add(pollen);
+// butterflies looping near the ground
+const butterflies=[];
+function makeButterfly(){
+  const g=new THREE.Group();
+  const col=FLOWER_COLORS[(Math.random()*FLOWER_COLORS.length)|0];
+  const wmat=new THREE.MeshStandardMaterial({color:col, side:THREE.DoubleSide, roughness:1, flatShading:true});
+  const wg=new THREE.CircleGeometry(0.12,10,0,Math.PI);
+  const wl=new THREE.Mesh(wg,wmat), wr=new THREE.Mesh(wg,wmat);
+  g.add(wl,wr); g.userData={wl,wr};
+  return g;
+}
+for(let i=0;i<10;i++){
+  const b=makeButterfly();
+  b.userData.anchor=randDir(); b.userData.r=0.6+rng()*0.9; b.userData.h=0.5+rng()*0.7;
+  b.userData.sp=0.5+rng()*0.7; b.userData.ph=rng()*6.28;
+  scene.add(b); butterflies.push(b);
+}
+
 // ---------- Player ----------
 const player = new THREE.Group();
 function makePlayer(){
@@ -800,7 +847,7 @@ function normalizeModel(obj, targetH, opts={}){
 // bring a freshly-loaded model into the game's smooth + toon + AO look
 function styleModel(root){
   root.traverse(o=>{
-    if(o.geometry && o.geometry.index===null && !_smoothed.has(o.geometry)){ smoothNormals(o.geometry); _smoothed.add(o.geometry); }
+    if(o.isMesh && o.geometry && o.geometry.index===null && !_smoothed.has(o.geometry)){ smoothNormals(o.geometry); _smoothed.add(o.geometry); }
     if(o.material && 'flatShading' in o.material && o.material.flatShading){ o.material.flatShading=false; o.material.needsUpdate=true; }
     if(o.material && 'envMapIntensity' in o.material) o.material.envMapIntensity=ENV_INTENSITY;
     if(o.material && o.material.isMeshStandardMaterial){
@@ -1021,6 +1068,7 @@ addEventListener('resize', ()=>{
   camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   if(composer) composer.setSize(innerWidth, innerHeight);
+  if(tiltPass) tiltPass.uniforms.resolution.value.set(innerWidth, innerHeight);
 });
 
 // ---------- Collision ----------
@@ -1045,8 +1093,33 @@ function resolveCollisions(){
   }
 }
 
-// ---------- Post-processing (toggleable: SSAO + bloom + SMAA) ----------
-let composer=null, fxOn=false;
+// Tilt-shift (miniature toy-world look) + soft vignette
+const TiltShiftShader = {
+  uniforms: { tDiffuse:{value:null}, resolution:{value:new THREE.Vector2(1,1)},
+              focus:{value:0.52}, range:{value:0.16}, strength:{value:2.2} },
+  vertexShader: `varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }`,
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform vec2 resolution;
+    uniform float focus; uniform float range; uniform float strength;
+    varying vec2 vUv;
+    void main(){
+      float d = clamp((abs(vUv.y-focus)-range)/(1.0-range), 0.0, 1.0);
+      vec2 px = (d*d*strength)/resolution;
+      vec4 c = texture2D(tDiffuse, vUv)*0.227;
+      c += texture2D(tDiffuse, vUv+vec2(px.x,0.0)*1.4)*0.155;
+      c += texture2D(tDiffuse, vUv-vec2(px.x,0.0)*1.4)*0.155;
+      c += texture2D(tDiffuse, vUv+vec2(0.0,px.y)*1.4)*0.155;
+      c += texture2D(tDiffuse, vUv-vec2(0.0,px.y)*1.4)*0.155;
+      c += texture2D(tDiffuse, vUv+vec2(px.x,px.y)*2.2)*0.0757;
+      c += texture2D(tDiffuse, vUv-vec2(px.x,px.y)*2.2)*0.0757;
+      float v = smoothstep(1.15, 0.45, distance(vUv, vec2(0.5)));   // vignette
+      c.rgb *= mix(1.0, v, 0.32);
+      gl_FragColor = c;
+    }`
+};
+
+// ---------- Post-processing (toggleable: SSAO + bloom + tilt-shift + SMAA) ----------
+let composer=null, fxOn=false, tiltPass=null;
 const fxBtn=document.getElementById('fxBtn');
 function buildComposer(){
   try{
@@ -1058,6 +1131,9 @@ function buildComposer(){
     const bloom=new UnrealBloomPass(new THREE.Vector2(innerWidth,innerHeight), 0.32, 0.6, 0.85);
     composer.addPass(bloom);
     composer.addPass(new OutputPass());                                       // ACES tonemap + sRGB
+    tiltPass=new ShaderPass(TiltShiftShader);
+    tiltPass.uniforms.resolution.value.set(innerWidth, innerHeight);
+    composer.addPass(tiltPass);
     const pr=renderer.getPixelRatio();
     composer.addPass(new SMAAPass(innerWidth*pr, innerHeight*pr));
   }catch(err){ console.warn('FX unavailable:', err); composer=null; }
@@ -1106,9 +1182,9 @@ function update(dt){
       const dist=Math.min(1,inMag)*MOVE_SPEED*dt;
       const axis=new THREE.Vector3().crossVectors(pUp, D).normalize();
       const q=new THREE.Quaternion().setFromAxisAngle(axis, dist/PLANET_R);
-      pPos.applyQuaternion(q); pFwd.applyQuaternion(q); camDir.applyQuaternion(q);
+      pPos.applyQuaternion(q); pFwd.applyQuaternion(q);   // NOTE: camDir is NOT moved
       pPos.copy(surface(pPos)); reTangent();
-      camDir.sub(pUp.clone().multiplyScalar(camDir.dot(pUp)));
+      camDir.sub(pUp.clone().multiplyScalar(camDir.dot(pUp)));  // only re-tangent the look, never rotate it
       if(camDir.lengthSq()<1e-6) camDir.copy(pFwd);
       camDir.normalize();
       // smoothly rotate the avatar to face the direction of travel
@@ -1161,6 +1237,23 @@ function update(dt){
     mb.userData.flag.rotation.z=Math.sin(t*4)*0.15;
   }
   cloudGroup.rotation.y+=dt*0.01;
+
+  // ambient life
+  waterTime.value += dt;
+  const at=performance.now()*0.001;
+  for(const s of treeSway){ s.o.quaternion.copy(s.q); s.o.rotateOnAxis(s.ax, Math.sin(at*1.3+s.ph)*0.035); }
+  pollen.rotation.y += dt*0.02;
+  for(const b of butterflies){
+    const u=b.userData, ang=at*u.sp+u.ph, base=u.anchor;
+    let t1=new THREE.Vector3(0,1,0).cross(base); if(t1.lengthSq()<1e-4) t1.set(1,0,0); t1.normalize();
+    const t2=new THREE.Vector3().crossVectors(base,t1).normalize();
+    const off=t1.clone().multiplyScalar(Math.cos(ang)*u.r).add(t2.clone().multiplyScalar(Math.sin(ang)*u.r));
+    const dir=base.clone().add(off.multiplyScalar(0.06)).normalize();
+    b.position.copy(dir.clone().multiplyScalar(terrainRadius(dir)+u.h+Math.sin(at*3+u.ph)*0.1));
+    orient(b, dir, t2);
+    const f=Math.sin(at*16+u.ph)*0.6+0.3;
+    u.wl.rotation.z=Math.PI/2 - f; u.wr.rotation.z=-Math.PI/2 + f;
+  }
 
   // emotes float
   for(let i=emoteSprites.length-1;i>=0;i--){
@@ -1219,7 +1312,7 @@ function smoothNormals(geo){
 }
 const _smoothed=new Set();
 scene.traverse(o=>{
-  if(o.geometry && o.geometry.index===null && !_smoothed.has(o.geometry)){
+  if(o.isMesh && o.geometry && o.geometry.index===null && !_smoothed.has(o.geometry)){
     smoothNormals(o.geometry); _smoothed.add(o.geometry);   // faceted polyhedra -> smooth
   }
   if(o.material && 'flatShading' in o.material && o.material.flatShading){
@@ -1236,6 +1329,7 @@ const toonGrad = (()=>{
 const toonBtn=document.getElementById('toonBtn');
 const toonPairs=[];
 scene.traverse(o=>{
+  if(o.userData && o.userData.noToon) return;       // e.g. water keeps its translucent material
   if(o.material && o.material.isMeshStandardMaterial){
     const s=o.material;
     const t=new THREE.MeshToonMaterial({
@@ -1260,9 +1354,9 @@ setToon(true);   // cartoon look on by default
 
 // ---------- Experimental: face control (raise eyebrows to jump) ----------
 function triggerJump(){ if(grounded){ vAlt=JUMP_V; grounded=false; } }
-let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, blinkArmed=true, blinkStart=0;
+let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, wideArmed=true, wideStart=0;
 const faceBtn=document.getElementById('faceBtn');
-const BLINK_ON=0.5, BLINK_OFF=0.28, BLINK_HOLD=200;   // eyes shut >=200ms = deliberate (ignores natural blinks)
+const WIDE_ON=0.4, WIDE_OFF=0.22, WIDE_HOLD=100;   // eyes opened wide >=100ms = jump
 faceBtn.addEventListener('click', async ()=>{
   if(faceOn){ stopFace(); return; }
   faceBtn.textContent='😮 載入中…';
@@ -1277,7 +1371,7 @@ faceBtn.addEventListener('click', async ()=>{
     faceVideo = document.createElement('video');
     faceVideo.srcObject=stream; faceVideo.muted=true; faceVideo.playsInline=true; faceVideo.setAttribute('playsinline','');
     await faceVideo.play();
-    faceOn=true; faceBtn.classList.add('on'); faceBtn.textContent='😑 閉眼跳';
+    faceOn=true; faceBtn.classList.add('on'); faceBtn.textContent='👀 睜眼跳';
     faceLoop();
   }catch(err){ console.warn('Face control failed:', err); faceBtn.textContent='😮 不支援'; stopFace(); }
 });
@@ -1295,13 +1389,13 @@ function faceLoop(){
   const cat = res && res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories;
   if(!cat) return;
   const get=n=>{ const c=cat.find(x=>x.categoryName===n); return c?c.score:0; };
-  const blink=(get('eyeBlinkLeft')+get('eyeBlinkRight'))/2;
+  const wide=(get('eyeWideLeft')+get('eyeWideRight'))/2;
   const now=performance.now();
-  if(blink>BLINK_ON){
-    if(blinkStart===0) blinkStart=now;
-    if(blinkArmed && now-blinkStart>=BLINK_HOLD){ blinkArmed=false; if(started) triggerJump(); }
-  } else if(blink<BLINK_OFF){
-    blinkStart=0; blinkArmed=true;                              // re-arm when eyes reopen
+  if(wide>WIDE_ON){
+    if(wideStart===0) wideStart=now;
+    if(wideArmed && now-wideStart>=WIDE_HOLD){ wideArmed=false; if(started) triggerJump(); }
+  } else if(wide<WIDE_OFF){
+    wideStart=0; wideArmed=true;                                // re-arm when eyes relax
   }
 }
 
