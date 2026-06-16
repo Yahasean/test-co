@@ -331,17 +331,20 @@ const cSand   = new THREE.Color(0xdcc98f);
 const cRock   = new THREE.Color(0x9c9a8c);
 const colArr = [];
 const _c = new THREE.Color();
+const ss = THREE.MathUtils.smoothstep;
 for (let i=0;i<pos.count;i++){
   v.fromBufferAttribute(pos,i);
   const n = v.clone().normalize();
-  const h = v.length() - PLANET_R;                  // -BUMP_AMP..BUMP_AMP
-  const sand = Math.sin(n.x*5.2+1.3)*Math.cos(n.z*4.7); // patchy sandy zones
-  if (h > 0.20) _c.copy(cRock);
-  else if (sand > 0.78) _c.copy(cSand);
-  else if (h > 0.07) _c.copy(cHill);
-  else if (h < -0.12) _c.copy(cValley);
-  else _c.copy(cGrass);
-  _c.offsetHSL(0, 0, (hash(i*1.7)-0.5)*0.04);        // subtle tonal noise
+  const h = v.length() - PLANET_R;                       // -BUMP_AMP..BUMP_AMP
+  const t = THREE.MathUtils.clamp((h+BUMP_AMP)/(2*BUMP_AMP), 0, 1); // 0 valley .. 1 peak
+  // continuous green gradient valley -> grass -> hill (no hard banding)
+  _c.copy(cValley).lerp(cGrass, ss(t,0.0,0.55)).lerp(cHill, ss(t,0.55,1.0));
+  // soft sandy patches only on low/flat ground
+  const sand = Math.sin(n.x*5.2+1.3)*Math.cos(n.z*4.7);
+  _c.lerp(cSand, ss(sand,0.62,0.92) * (1-ss(t,0.45,0.7)) * 0.85);
+  // rocky peaks fade in
+  _c.lerp(cRock, ss(t,0.82,1.0));
+  _c.offsetHSL(0, 0, (hash(i*1.7)-0.5)*0.02);            // very subtle tonal noise
   colArr.push(_c.r, _c.g, _c.b);
 }
 planetGeo.setAttribute('color', new THREE.Float32BufferAttribute(colArr, 3));
@@ -671,7 +674,7 @@ placeStructure(makeStairs(5), jitterDir(villageDirs[3], 0.09));
         occ=Math.max(occ, 1-ang/rad);
       }
     }
-    const f = ao*(1-occ*0.38);
+    const f = ao*(1-occ*0.3);
     colAttr.setXYZ(i, colAttr.getX(i)*f, colAttr.getY(i)*f, colAttr.getZ(i)*f);
   }
   colAttr.needsUpdate=true;
@@ -1093,7 +1096,7 @@ scene.traverse(o=>{
 function smoothNormals(geo){
   geo.computeVertexNormals();
   const pos=geo.attributes.position, nrm=geo.attributes.normal, acc=new Map();
-  const key=i=>pos.getX(i).toFixed(3)+'_'+pos.getY(i).toFixed(3)+'_'+pos.getZ(i).toFixed(3);
+  const key=i=>pos.getX(i).toFixed(2)+'_'+pos.getY(i).toFixed(2)+'_'+pos.getZ(i).toFixed(2);
   for(let i=0;i<pos.count;i++){
     const k=key(i); let a=acc.get(k); if(!a){ a=[0,0,0]; acc.set(k,a); }
     a[0]+=nrm.getX(i); a[1]+=nrm.getY(i); a[2]+=nrm.getZ(i);
