@@ -32,6 +32,9 @@
   #tasks h2 { font-size: 13px; letter-spacing: .08em; opacity: .8; margin-bottom: 6px; text-transform: uppercase; }
   #tasks .count { font-size: 26px; font-weight: 700; }
   #tasks .hint { font-size: 12px; opacity: .75; margin-top: 6px; }
+  #tasks #timer { font-size: 15px; font-weight: 700; opacity: .85; font-variant-numeric: tabular-nums; }
+  #tasks .parcel { font-size: 12px; opacity: .85; margin-top: 6px; display: flex; align-items: center; gap: 6px; }
+  #parcelSwatch { width: 16px; height: 16px; border-radius: 4px; background: #888; box-shadow: 0 0 0 2px rgba(255,255,255,.5) inset; }
 
   #compass {
     top: 16px; left: 50%; transform: translateX(-50%);
@@ -88,6 +91,12 @@
     backdrop-filter: blur(6px); cursor: pointer; }
   #faceBtn.on { background: rgba(60,170,120,.92); border-color: rgba(255,255,255,.5); }
 
+  #soundBtn { position: fixed; top: 176px; right: 16px; z-index: 30; pointer-events: auto;
+    background: rgba(30,40,60,.55); color: #fff; border: 1px solid rgba(255,255,255,.3);
+    border-radius: 999px; padding: 8px 14px; font-size: 13px; font-weight: 600;
+    backdrop-filter: blur(6px); cursor: pointer; }
+  #soundBtn.off { opacity: .55; }
+
   /* Mobile buttons */
   #mobile { position: fixed; inset: 0; pointer-events: none; display: none; }
   .stick { position: absolute; bottom: 30px; pointer-events: auto; }
@@ -127,8 +136,9 @@
 <div id="hud">
   <div id="tasks" class="panel">
     <h2>📮 今日派件</h2>
-    <div><span class="count" id="delivered">0</span> / <span id="total">5</span></div>
-    <div class="hint" id="taskHint">找到發光的信箱送件</div>
+    <div><span class="count" id="delivered">0</span> / <span id="total">5</span> &nbsp; <span id="timer">0:00</span></div>
+    <div class="parcel" id="parcelRow">手上包裹 <span id="parcelSwatch"></span></div>
+    <div class="hint" id="taskHint">把包裹送到「同色」的信箱</div>
   </div>
   <div id="compass" class="panel">🧭 <span>下一站</span><span class="dist" id="dist">— m</span></div>
   <div id="prompt" class="panel">靠近信箱,按 <b>E</b> / 點擊 投遞</div>
@@ -143,6 +153,7 @@
 <button id="fxBtn">✨ 特效</button>
 <button id="toonBtn">🎨 卡通</button>
 <button id="faceBtn">😮 表情控制</button>
+<button id="soundBtn">🔊 聲音</button>
 
 <div id="mobile">
   <div id="stickL" class="stick"><div class="pad"><div class="knob" id="knobL"></div></div></div>
@@ -162,7 +173,7 @@
 
 <div id="overlay">
   <h1>MINI MESSENGER</h1>
-  <p>歡迎來到迷你星球!穿上郵差背包,把 5 封信件送到島上發光的信箱。星球很小,小到看得見地平線的弧度。</p>
+  <p>歡迎來到迷你星球!你手上會拿到一個<b>有顏色的包裹</b>,把它送到<b>同色的信箱</b>。跟著頭上的箭頭走,計時越快星級越高。星球很小,小到看得見地平線的弧度。</p>
   <div class="controls">
     <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> 移動 · <kbd>Space</kbd> 跳躍 · <kbd>E</kbd> 投遞 · 滑鼠 轉視角<br/>
     (手機:左下搖桿移動,右下按鈕跳躍 / 投遞,右上「📱 體感視角」可用傾斜手機轉鏡頭)
@@ -577,26 +588,27 @@ for(let i=0;i<5;i++) placeHouse(HOUSE_COLORS[i], randDir());
 
 // ---------- Mailboxes (delivery targets) ----------
 const mailboxes = [];
-function makeMailbox(){
+const MAILBOX_COLORS = [0xe0533d, 0x3d8be0, 0x49b675, 0xf0a52e, 0xa864d8]; // red blue green amber purple
+function makeMailbox(color){
   const g = new THREE.Group();
   const post = new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,0.7,6),
     new THREE.MeshStandardMaterial({color:0x6b4a2b, roughness:1}));
   post.position.y=0.35; post.castShadow=true;
   const box = new THREE.Mesh(new THREE.BoxGeometry(0.45,0.35,0.6),
-    new THREE.MeshStandardMaterial({color:0xe0533d, flatShading:true, roughness:.8}));
+    new THREE.MeshStandardMaterial({color, flatShading:true, roughness:.8}));
   box.position.y=0.75; box.castShadow=true;
   const flag = new THREE.Mesh(new THREE.BoxGeometry(0.04,0.22,0.16),
     new THREE.MeshStandardMaterial({color:0xffd23f}));
   flag.position.set(0.26,0.82,0); flag.castShadow=true;
-  // glowing ring marker
+  // glowing ring + beam in the mailbox's own colour
   const ring = new THREE.Mesh(new THREE.TorusGeometry(0.9,0.07,8,28),
-    new THREE.MeshBasicMaterial({color:0xffe14d}));
+    new THREE.MeshBasicMaterial({color}));
   ring.rotation.x=Math.PI/2; ring.position.y=0.06;
   const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.5,0.5,5,12,1,true),
-    new THREE.MeshBasicMaterial({color:0xffe14d, transparent:true, opacity:0.12, side:THREE.DoubleSide}));
+    new THREE.MeshBasicMaterial({color, transparent:true, opacity:0.12, side:THREE.DoubleSide}));
   beam.position.y=2.5;
   g.add(post, box, flag, ring, beam, shadowDisc(0.5));
-  g.userData = { ring, beam, flag, done:false };
+  g.userData = { ring, beam, flag, box, color, done:false };
   return g;
 }
 // spread targets around planet using golden-spiral for even coverage
@@ -605,7 +617,7 @@ for(let i=0;i<NUM_TASKS;i++){
   const r = Math.sqrt(1-y*y);
   const phi = i*2.399963;
   const dir = new THREE.Vector3(Math.cos(phi)*r, y, Math.sin(phi)*r);
-  const mb = makeMailbox();
+  const mb = makeMailbox(MAILBOX_COLORS[i % MAILBOX_COLORS.length]);
   placeOnPlanet(mb, dir);
   mb.userData.dir = dir.clone();
   mailboxes.push(mb); scene.add(mb);
@@ -1006,6 +1018,102 @@ function spawnEmote(ch){
   scene.add(sp); emoteSprites.push(sp);
 }
 
+// ---------- Audio: procedural music + SFX (no files) ----------
+const Sound = (()=>{
+  let ctx=null, master=null, musicOn=true, timer=null;
+  function init(){ if(ctx) return; try{
+    ctx=new (window.AudioContext||window.webkitAudioContext)();
+    master=ctx.createGain(); master.gain.value=0.5; master.connect(ctx.destination);
+  }catch(e){ ctx=null; } }
+  function envGain(a,d,peak){ const g=ctx.createGain(); const t=ctx.currentTime;
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(peak,t+a);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+a+d); return g; }
+  function tone(freq, {type='sine',a=0.01,d=0.2,peak=0.3,detune=0,dest=null}={}){
+    if(!ctx) return; const t=ctx.currentTime;
+    const o=ctx.createOscillator(), g=envGain(a,d,peak);
+    o.type=type; o.frequency.value=freq; o.detune.value=detune;
+    o.connect(g); g.connect(dest||master); o.start(t); o.stop(t+a+d+0.05);
+  }
+  function noise({d=0.15,peak=0.3,lp=1200}={}){
+    if(!ctx) return; const len=Math.floor(ctx.sampleRate*(d+0.05));
+    const buf=ctx.createBuffer(1,len,ctx.sampleRate), da=buf.getChannelData(0);
+    for(let i=0;i<len;i++) da[i]=Math.random()*2-1;
+    const src=ctx.createBufferSource(); src.buffer=buf;
+    const g=envGain(0.005,d,peak); const f=ctx.createBiquadFilter();
+    f.type='lowpass'; f.frequency.value=lp;
+    src.connect(f); f.connect(g); g.connect(master); src.start(ctx.currentTime);
+  }
+  const SCALE=[523.25,587.33,659.25,783.99,880.0,1046.5];
+  function musicTick(){ if(!ctx||!musicOn) return;
+    if(Math.random()<0.66){ const f=SCALE[(Math.random()*SCALE.length)|0];
+      tone(f,{type:'triangle',a:0.01,d:0.6,peak:0.10});
+      if(Math.random()<0.3) tone(f/2,{type:'sine',a:0.02,d:0.9,peak:0.05}); } }
+  function startMusic(){ if(!ctx||timer) return;
+    const padG=ctx.createGain(); padG.gain.value=0.045; padG.connect(master);
+    const f=ctx.createBiquadFilter(); f.type='lowpass'; f.frequency.value=560; f.connect(padG);
+    [130.81,196.0].forEach(fr=>{ const o=ctx.createOscillator(); o.type='triangle'; o.frequency.value=fr; o.connect(f); o.start(); });
+    timer=setInterval(musicTick,620); }
+  return {
+    start(){ init(); if(ctx&&ctx.state==='suspended') ctx.resume(); startMusic(); },
+    setMuted(m){ musicOn=!m; if(master) master.gain.value=m?0:0.5; },
+    step(){ noise({d:0.08,peak:0.06,lp:850}); },
+    jump(){ tone(440,{type:'sine',a:0.005,d:0.14,peak:0.22}); tone(660,{type:'sine',a:0.02,d:0.18,peak:0.12}); },
+    land(){ noise({d:0.11,peak:0.16,lp:480}); tone(150,{type:'sine',a:0.005,d:0.12,peak:0.18}); },
+    chime(){ [659.25,880,1046.5].forEach((f,i)=> setTimeout(()=>tone(f,{type:'triangle',a:0.01,d:0.5,peak:0.18}), i*90)); },
+    win(){ [523,659,784,1046,1319].forEach((f,i)=> setTimeout(()=>tone(f,{type:'triangle',a:0.01,d:0.55,peak:0.2}), i*130)); },
+    wrong(){ tone(180,{type:'square',a:0.005,d:0.15,peak:0.12}); }
+  };
+})();
+const soundBtn=document.getElementById('soundBtn');
+let muted=false;
+soundBtn.addEventListener('click', ()=>{ muted=!muted; Sound.setMuted(muted);
+  soundBtn.classList.toggle('off', muted); soundBtn.textContent = muted?'🔇 靜音':'🔊 聲音'; });
+
+// ---------- Juice: particles, squash & stretch, held parcel, guide arrow ----------
+const dustTex = makeTex(64,(x,s)=>{ const g=x.createRadialGradient(s/2,s/2,0,s/2,s/2,s/2);
+  g.addColorStop(0,'rgba(255,255,255,0.95)'); g.addColorStop(1,'rgba(255,255,255,0)'); x.fillStyle=g; x.fillRect(0,0,s,s); },[1,1]);
+const puffs=[];
+function spawnPuff(pos, up, opts={}){
+  const n=opts.n||8, col=opts.color!=null?opts.color:0xffffff, spd=opts.spd||1.6,
+        size=opts.size||0.28, life=opts.life||0.5, rise=opts.rise!=null?opts.rise:0.6;
+  let t1=new THREE.Vector3(0,1,0).cross(up); if(t1.lengthSq()<1e-4) t1.set(1,0,0); t1.normalize();
+  const t2=new THREE.Vector3().crossVectors(up,t1).normalize();
+  for(let i=0;i<n;i++){
+    const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:dustTex, color:col, transparent:true,
+      depthWrite:false, blending: opts.additive?THREE.AdditiveBlending:THREE.NormalBlending, opacity:0.9}));
+    sp.scale.setScalar(size*(0.6+Math.random()*0.7)); sp.position.copy(pos);
+    const ang=Math.random()*Math.PI*2, sp2=spd*(0.5+Math.random());
+    const vel=t1.clone().multiplyScalar(Math.cos(ang)*sp2)
+      .add(t2.clone().multiplyScalar(Math.sin(ang)*sp2))
+      .add(up.clone().multiplyScalar(rise+Math.random()*0.5));
+    sp.userData={vel, life:0, max:life*(0.7+Math.random()*0.6), up};
+    scene.add(sp); puffs.push(sp);
+  }
+}
+function updatePuffs(dt){
+  for(let i=puffs.length-1;i>=0;i--){
+    const sp=puffs[i], u=sp.userData; u.life+=dt;
+    sp.position.addScaledVector(u.vel, dt);
+    u.vel.addScaledVector(u.up, -3.2*dt); u.vel.multiplyScalar(1-2.4*dt);
+    sp.material.opacity=Math.max(0, 0.9*(1-u.life/u.max));
+    sp.scale.multiplyScalar(1+dt*1.6);
+    if(u.life>=u.max){ scene.remove(sp); puffs.splice(i,1); }
+  }
+}
+let squashY=1;                        // jump/land squash & stretch on player.scale
+let camDip=0;                         // small camera dip on landing
+let stepAccum=0.3;                    // footstep cadence accumulator
+// parcel carried in hand (colour = current target)
+const heldParcel = new THREE.Mesh(new THREE.BoxGeometry(0.2,0.15,0.15),
+  new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.7}));
+heldParcel.position.set(0.25,0.5,0.16); heldParcel.castShadow=true; heldParcel.userData.noToon=true;
+heldParcel.visible=false; player.add(heldParcel);
+// floating guide arrow pointing to the current target's colour
+const arrowPivot=new THREE.Object3D();
+const arrow=new THREE.Mesh(new THREE.ConeGeometry(0.16,0.42,8), new THREE.MeshBasicMaterial({color:0xffffff}));
+arrowPivot.add(arrow); arrowPivot.visible=false; scene.add(arrowPivot);
+const _UPY=new THREE.Vector3(0,1,0);
+
 // ---------- Delivery logic ----------
 let delivered = 0;
 const elDelivered=document.getElementById('delivered');
@@ -1016,6 +1124,12 @@ const elPrompt=document.getElementById('prompt');
 const elToast=document.getElementById('toast');
 const elTaskHint=document.getElementById('taskHint');
 
+const elTimer=document.getElementById('timer');
+const elSwatch=document.getElementById('parcelSwatch');
+let startTime=0, elapsed=0, finishTime=0, currentTarget=null, parcelColor=0xffffff;
+function hex(c){ return '#'+('000000'+c.toString(16)).slice(-6); }
+function fmtTime(s){ const m=Math.floor(s/60), sec=Math.floor(s%60); return m+':' + ('0'+sec).slice(-2); }
+
 function nearestTarget(){
   let best=null, bestD=Infinity;
   for(const mb of mailboxes){
@@ -1025,21 +1139,33 @@ function nearestTarget(){
   }
   return {mb:best, d:bestD};
 }
+// pick the next parcel: target the nearest undelivered mailbox, parcel takes its colour
+function pickNextParcel(){
+  const rem=mailboxes.filter(m=>!m.userData.done);
+  if(!rem.length){ currentTarget=null; parcelColor=0xffffff; heldParcel.visible=false; arrowPivot.visible=false; return; }
+  let best=rem[0], bd=Infinity;
+  for(const m of rem){ const d=m.position.distanceTo(player.position); if(d<bd){ bd=d; best=m; } }
+  currentTarget=best; parcelColor=best.userData.color;
+  heldParcel.visible=true; heldParcel.material.color.setHex(parcelColor);
+  arrow.material.color.setHex(parcelColor); arrowPivot.visible=true;
+  elSwatch.style.background=hex(parcelColor);
+}
 function tryDeliver(){
   if(!started || delivered>=NUM_TASKS) return;
   const {mb,d}=nearestTarget();
-  if(mb && d<=DELIVER_RANGE){
-    mb.userData.done=true;
-    mb.userData.ring.visible=false;
-    mb.userData.beam.visible=false;
-    delivered++;
-    elDelivered.textContent=delivered;
-    spawnEmote('💌');
-    showToast(delivered>=NUM_TASKS ? '🎉 全部送達!' : '📬 +1 已投遞');
-    if(delivered>=NUM_TASKS){
-      elTaskHint.textContent='任務完成,謝謝你的辛勞!';
-      setTimeout(endGame, 1400);
-    }
+  if(!mb || d>DELIVER_RANGE) return;
+  if(mb.userData.color!==parcelColor){ showToast('包裹顏色不符 🎨'); Sound.wrong(); return; }
+  mb.userData.done=true; mb.userData.ring.visible=false; mb.userData.beam.visible=false;
+  delivered++; elDelivered.textContent=delivered;
+  Sound.chime(); spawnEmote('💌');
+  spawnPuff(mb.position.clone(), mb.position.clone().normalize(),
+    {n:18, color:mb.userData.color, spd:2.8, rise:1.7, size:0.26, life:0.95, additive:true});
+  if(delivered>=NUM_TASKS){
+    finishTime=elapsed;
+    heldParcel.visible=false; arrowPivot.visible=false; currentTarget=null;
+    Sound.win(); showToast('🎉 全部送達!'); setTimeout(endGame, 1500);
+  } else {
+    showToast('📬 +1 已投遞'); pickNextParcel();
   }
 }
 let toastTimer=null;
@@ -1054,15 +1180,26 @@ const overlay=document.getElementById('overlay');
 document.getElementById('loading').style.display='none';
 document.getElementById('beginBtn').addEventListener('click', ()=>{
   overlay.classList.add('hidden'); started=true;
+  Sound.start();
+  startTime=performance.now();
+  pickNextParcel();
 });
 function endGame(){
+  const t=finishTime||elapsed;
+  const stars = t<70?3 : t<110?2 : 1;
+  let best=t, record='';
+  try{
+    const prev=parseFloat(localStorage.getItem('mm_best')||'0');
+    if(!prev || t<prev){ localStorage.setItem('mm_best', t.toFixed(1)); record=' &nbsp;🏆 新紀錄!'; }
+    best=parseFloat(localStorage.getItem('mm_best'))||t;
+  }catch(e){}
   overlay.querySelector('h1').textContent='✅ 派件完成';
-  overlay.querySelector('p').textContent='你在迷你星球上送完了所有信件!按下重新開始再玩一次。';
+  overlay.querySelector('p').innerHTML=`用時 <b>${fmtTime(t)}</b> &nbsp; <span style="color:#ffd23f;font-size:22px">${'★'.repeat(stars)}${'☆'.repeat(3-stars)}</span><br/>最佳成績 ${fmtTime(best)}${record}`;
   document.getElementById('beginBtn').textContent='RESTART';
   overlay.classList.remove('hidden');
-  // reset
+  // reset for next run
   mailboxes.forEach(mb=>{ mb.userData.done=false; mb.userData.ring.visible=true; mb.userData.beam.visible=true; });
-  delivered=0; elDelivered.textContent='0'; elTaskHint.textContent='找到發光的信箱送件';
+  delivered=0; elDelivered.textContent='0';
   started=false;
 }
 
@@ -1200,15 +1337,26 @@ function update(dt){
   resolveCollisions();  // keep player out of trees & houses
 
   // jump / gravity
-  if(keys['Space'] && grounded){ vAlt=JUMP_V; grounded=false; }
+  if(keys['Space'] && grounded){ vAlt=JUMP_V; grounded=false; squashY=1.18; Sound.jump(); }
   if(!grounded){
     vAlt-=GRAVITY*dt; altitude+=vAlt*dt;
-    if(altitude<=0){ altitude=0; vAlt=0; grounded=true; }
+    if(altitude<=0){ altitude=0; vAlt=0; grounded=true; squashY=0.78; camDip=0.28; Sound.land();
+      spawnPuff(pUp.clone().multiplyScalar(terrainRadius(pUp)), pUp.clone(),
+        {n:10, color:0xe9ddc7, spd:1.9, rise:0.5, size:0.24, life:0.45}); }
   }
 
   // place avatar on the terrain surface (so it never sinks into hills)
   player.position.copy(pUp.clone().multiplyScalar(terrainRadius(pUp)+altitude));
   orient(player, pUp, pFwd);
+  // jump/land squash & stretch (volume-preserving) + camera dip decay
+  squashY += (1-squashY)*Math.min(1, dt*12);
+  const sxz=1/Math.sqrt(squashY);
+  player.scale.set(sxz, squashY, sxz);
+  camDip *= Math.max(0, 1-dt*8);
+  // footsteps (sound + little dust) — works for procedural and model avatars
+  if(moving && grounded){ stepAccum+=dt; if(stepAccum>=0.3){ stepAccum=0; Sound.step();
+    spawnPuff(pUp.clone().multiplyScalar(terrainRadius(pUp)), pUp.clone(), {n:3, color:0xe8dcc4, spd:0.7, rise:0.15, size:0.13, life:0.35}); } }
+  else stepAccum=0.3;
 
   // walk animation
   const tNow=performance.now()*0.001;
@@ -1264,6 +1412,25 @@ function update(dt){
     sp.material.opacity=Math.max(0,1-sp.userData.life/1.6);
     if(sp.userData.life>1.6){ scene.remove(sp); emoteSprites.splice(i,1); }
   }
+  updatePuffs(dt);
+
+  // timer
+  elapsed=(performance.now()-startTime)/1000;
+  elTimer.textContent=fmtTime(elapsed);
+
+  // guide arrow toward the current parcel's mailbox
+  if(currentTarget){
+    const near=currentTarget.position.distanceTo(player.position) < DELIVER_RANGE*1.3;
+    arrowPivot.visible=!near;
+    if(!near){
+      const td=currentTarget.userData.dir;
+      const bearing=td.clone().sub(pUp.clone().multiplyScalar(td.dot(pUp)));
+      if(bearing.lengthSq()>1e-6){ bearing.normalize();
+        arrowPivot.position.copy(player.position).add(pUp.clone().multiplyScalar(1.9+Math.sin(at*3)*0.08));
+        arrowPivot.quaternion.setFromUnitVectors(_UPY, bearing);
+      }
+    }
+  } else arrowPivot.visible=false;
 
   // --- camera (orbit behind the look direction, on planet up) ---
   const up=pUp;
@@ -1281,19 +1448,18 @@ function update(dt){
   const f=camDir.clone().applyAxisAngle(up, gyroOn?gyroYaw:0).normalize();
   const back=f.clone().multiplyScalar(-1);
   const offsetDir=back.clone().multiplyScalar(Math.cos(pitch)).add(up.clone().multiplyScalar(Math.sin(pitch))).normalize();
-  _camPos.copy(player.position).add(offsetDir.multiplyScalar(camDist)).add(up.clone().multiplyScalar(0.6));
+  _camPos.copy(player.position).add(offsetDir.multiplyScalar(camDist)).add(up.clone().multiplyScalar(0.6 - camDip));
   camera.position.lerp(_camPos, 0.15);
   _camTarget.copy(player.position).add(up.clone().multiplyScalar(0.8));
   camera.up.copy(up);
   camera.lookAt(_camTarget);
 
   // --- HUD compass / prompt ---
-  const {mb,d}=nearestTarget();
-  if(mb){
+  if(currentTarget){
     elCompass.style.opacity='1';
-    elDist.textContent=d.toFixed(1)+' m';
-    if(d<=DELIVER_RANGE){ elPrompt.classList.add('show'); }
-    else elPrompt.classList.remove('show');
+    elDist.textContent=currentTarget.position.distanceTo(player.position).toFixed(1)+' m';
+    const {mb,d}=nearestTarget();
+    if(mb && d<=DELIVER_RANGE) elPrompt.classList.add('show'); else elPrompt.classList.remove('show');
   } else {
     elCompass.style.opacity='0'; elPrompt.classList.remove('show');
   }
@@ -1363,7 +1529,7 @@ toonBtn.addEventListener('click', ()=> setToon(!toonOn));
 setToon(true);   // cartoon look on by default
 
 // ---------- Experimental: face control (raise eyebrows to jump) ----------
-function triggerJump(){ if(grounded){ vAlt=JUMP_V; grounded=false; } }
+function triggerJump(){ if(grounded){ vAlt=JUMP_V; grounded=false; squashY=1.18; Sound.jump(); } }
 let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, mouthArmed=true, mouthStart=0;
 const faceBtn=document.getElementById('faceBtn');
 const MOUTH_ON=0.4, MOUTH_OFF=0.2, MOUTH_HOLD=80;   // mouth open (jawOpen) >=80ms = jump
