@@ -97,6 +97,11 @@
     backdrop-filter: blur(6px); cursor: pointer; }
   #soundBtn.off { opacity: .55; }
 
+  #faceHint { position: fixed; top: 214px; right: 16px; z-index: 30; display: none;
+    background: rgba(30,40,60,.5); color: #cfeeff; border-radius: 8px; padding: 5px 9px;
+    font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; letter-spacing: .02em;
+    backdrop-filter: blur(4px); pointer-events: none; }
+
   /* Mobile buttons */
   #mobile { position: fixed; inset: 0; pointer-events: none; display: none; }
   .stick { position: absolute; bottom: 30px; pointer-events: auto; }
@@ -154,6 +159,7 @@
 <button id="toonBtn">🎨 卡通</button>
 <button id="faceBtn">😮 表情控制</button>
 <button id="soundBtn">🔊 聲音</button>
+<div id="faceHint"></div>
 
 <div id="mobile">
   <div id="stickL" class="stick"><div class="pad"><div class="knob" id="knobL"></div></div></div>
@@ -1530,9 +1536,18 @@ setToon(true);   // cartoon look on by default
 
 // ---------- Experimental: face control (raise eyebrows to jump) ----------
 function triggerJump(){ if(grounded){ vAlt=JUMP_V; grounded=false; squashY=1.18; Sound.jump(); } }
-let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null, mouthArmed=true, mouthStart=0;
-const faceBtn=document.getElementById('faceBtn');
-const MOUTH_ON=0.4, MOUTH_OFF=0.2, MOUTH_HOLD=80;   // mouth open (jawOpen) >=80ms = jump
+let faceOn=false, faceLandmarker=null, faceVideo=null, faceRAF=null;
+const faceBtn=document.getElementById('faceBtn'), faceHint=document.getElementById('faceHint');
+// expression -> action map. Rising-edge with hysteresis (on>off) = responsive, no accidental repeats.
+const smileGet=g=>(g('mouthSmileLeft')+g('mouthSmileRight'))/2;
+const browGet =g=>Math.max(g('browInnerUp'), (g('browOuterUpLeft')+g('browOuterUpRight'))/2);
+const EXPR=[
+  { e:'😮', on:0.24, off:0.12, act:()=>{ if(started) triggerJump(); },   get:g=>g('jawOpen') },      // mouth open = jump
+  { e:'😄', on:0.52, off:0.32, act:()=>spawnEmote('👋'),                 get:smileGet },             // smile = wave
+  { e:'😗', on:0.40, off:0.20, act:()=>spawnEmote('❤️'),                 get:g=>g('mouthPucker') },  // pucker = love
+  { e:'🤨', on:0.42, off:0.22, act:()=>{ if(started) tryDeliver(); },    get:browGet },              // brows up = deliver
+];
+EXPR.forEach(x=>x.armed=true);
 faceBtn.addEventListener('click', async ()=>{
   if(faceOn){ stopFace(); return; }
   faceBtn.textContent='😮 載入中…';
@@ -1547,12 +1562,15 @@ faceBtn.addEventListener('click', async ()=>{
     faceVideo = document.createElement('video');
     faceVideo.srcObject=stream; faceVideo.muted=true; faceVideo.playsInline=true; faceVideo.setAttribute('playsinline','');
     await faceVideo.play();
-    faceOn=true; faceBtn.classList.add('on'); faceBtn.textContent='😮 張嘴跳';
+    faceOn=true; faceBtn.classList.add('on'); faceBtn.textContent='😮 表情:開';
+    faceHint.style.display='block';
+    EXPR.forEach(x=>x.armed=true);
+    showToast('😮張嘴=跳 · 😄微笑=揮手 · 😗嘟嘴=愛心 · 🤨挑眉=投遞');
     faceLoop();
   }catch(err){ console.warn('Face control failed:', err); faceBtn.textContent='😮 不支援'; stopFace(); }
 });
 function stopFace(){
-  faceOn=false; faceBtn.classList.remove('on');
+  faceOn=false; faceBtn.classList.remove('on'); faceHint.style.display='none';
   if(!/不支援|載入/.test(faceBtn.textContent)) faceBtn.textContent='😮 表情控制';
   if(faceRAF) cancelAnimationFrame(faceRAF);
   if(faceVideo && faceVideo.srcObject){ faceVideo.srcObject.getTracks().forEach(t=>t.stop()); faceVideo.srcObject=null; }
@@ -1563,16 +1581,16 @@ function faceLoop(){
   if(!faceLandmarker || !faceVideo || faceVideo.readyState<2) return;
   let res; try{ res=faceLandmarker.detectForVideo(faceVideo, performance.now()); }catch(e){ return; }
   const cat = res && res.faceBlendshapes && res.faceBlendshapes[0] && res.faceBlendshapes[0].categories;
-  if(!cat) return;
-  const get=n=>{ const c=cat.find(x=>x.categoryName===n); return c?c.score:0; };
-  const mouth=get('jawOpen');                  // mouth-open strength
-  const now=performance.now();
-  if(mouth>MOUTH_ON){
-    if(mouthStart===0) mouthStart=now;
-    if(mouthArmed && now-mouthStart>=MOUTH_HOLD){ mouthArmed=false; if(started) triggerJump(); }
-  } else if(mouth<MOUTH_OFF){
-    mouthStart=0; mouthArmed=true;                              // re-arm when mouth closes
+  if(!cat){ if(faceHint) faceHint.textContent='沒偵測到臉'; return; }
+  const g=n=>{ const c=cat.find(x=>x.categoryName===n); return c?c.score:0; };
+  let hint='';
+  for(const x of EXPR){
+    const v=x.get(g);
+    hint += x.e + v.toFixed(2).slice(1) + ' ';
+    if(x.armed && v>x.on){ x.armed=false; x.act(); }
+    else if(!x.armed && v<x.off){ x.armed=true; }
   }
+  faceHint.textContent=hint.trim();
 }
 
 tick();

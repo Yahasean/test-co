@@ -68,7 +68,16 @@ python3 -m http.server 8000
 
 ## 實驗功能:表情控制(挑眉跳躍)
 
-右上「😮 表情控制」會用 [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe) 在瀏覽器內讀臉部 blendshape,**張嘴**(`jawOpen`)即觸發跳躍。需相機權限與 HTTPS,運算全在裝置端、不上傳。
+右上「😮 表情控制」會用 [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe) 在瀏覽器內讀臉部 blendshape,對應多種動作(上升緣觸發 + 遲滯,反應靈敏又不誤觸),並在畫面顯示即時偵測值方便微調:
+
+| 表情 | blendshape | 動作 |
+| --- | --- | --- |
+| 😮 張嘴 | `jawOpen` | 跳躍 |
+| 😄 微笑 | `mouthSmile` | 揮手 👋 |
+| 😗 嘟嘴 | `mouthPucker` | 愛心 ❤️ |
+| 🤨 挑眉 | `browInnerUp` | 投遞 |
+
+需相機權限與 HTTPS,運算全在裝置端、不上傳。門檻在 `EXPR` 陣列的 `on`/`off` 可調。
 
 `MODELS` 也支援 `tree` / `house`,填上 url 後會把所有已擺放的樹/房子實例整批換成模型(用 `SkeletonUtils` 複製),並自動套用平滑/卡通/AO 風格。
 
